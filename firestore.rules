@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // matches, predictions: 읽기는 공개, 쓰기는 서버(Functions)만
+    match /matches/{matchId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /predictions/{predId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // 오답 노트: 서버만
+    match /feedback/{fbId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // 주간 추천: 읽기 공개, 쓰기는 서버만
+    match /recommendations/{recId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // 성적 통계: 읽기 공개, 쓰기는 서버만
+    match /stats/{statId} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}
