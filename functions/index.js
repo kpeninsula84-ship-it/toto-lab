@@ -344,38 +344,33 @@ export const collectResults = onSchedule(
   }
 );
 
-// Weekly Saturday 17:00 KST — fetch injury/suspension status for all active EPL teams
-// Runs 1 hour before analyzeDaily (18:00) when most weekend fixtures are analyzed
-export const collectInjuries = onSchedule(
-  {
-    schedule: "0 17 * * 6",
-    timeZone: "Asia/Seoul",
-    timeoutSeconds: 540,
-  },
-  async () => {
-    const standings = await getStandings();
-    const teams = new Map(standings.map((s) => [s.teamId, s.team]));
-
-    console.log(`[injuries] collecting for ${teams.size} teams`);
-
-    for (const [teamId, teamName] of teams) {
-      try {
-        const injuries = await fetchTeamInjuries(teamName);
-        await db.collection("injuries").doc(String(teamId)).set({
-          teamId,
-          teamName,
-          updatedAt: Timestamp.now(),
-          out: injuries.out || [],
-          doubtful: injuries.doubtful || [],
-        });
-        console.log(`[injuries] ${teamName} — out=${injuries.out?.length ?? 0} doubtful=${injuries.doubtful?.length ?? 0}`);
-      } catch (err) {
-        console.error(`[injuries] failed for ${teamName}:`, err.message);
-      }
-      await new Promise((r) => setTimeout(r, 8000));
-    }
-  }
-);
+// DISABLED: web_search-based injury collection hits Anthropic rate limits
+// and burns tokens. Currently using manual uploads via updateInjuriesBulk instead.
+// To re-enable, uncomment below.
+//
+// export const collectInjuries = onSchedule(
+//   {
+//     schedule: "0 17 * * 6",
+//     timeZone: "Asia/Seoul",
+//     timeoutSeconds: 540,
+//   },
+//   async () => {
+//     const standings = await getStandings();
+//     const teams = new Map(standings.map((s) => [s.teamId, s.team]));
+//     for (const [teamId, teamName] of teams) {
+//       try {
+//         const injuries = await fetchTeamInjuries(teamName);
+//         await db.collection("injuries").doc(String(teamId)).set({
+//           teamId, teamName, updatedAt: Timestamp.now(),
+//           out: injuries.out || [], doubtful: injuries.doubtful || [],
+//         });
+//       } catch (err) {
+//         console.error(`[injuries] failed for ${teamName}:`, err.message);
+//       }
+//       await new Promise((r) => setTimeout(r, 8000));
+//     }
+//   }
+// );
 
 // Manual HTTP trigger for collecting injuries
 export const collectInjuriesManual = onRequest(
@@ -486,6 +481,61 @@ export const collectResultsManual = onRequest(
       }
       const stats = await computeAndSaveStats();
       res.json({ ok: true, fetched: finished.length, updated, stats });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// Re-analyze all upcoming matches in next 36h (useful after injury data update).
+// Forces re-analysis even if `analyzed: true`.
+export const reanalyzeUpcomingManual = onRequest(
+  { invoker: "public", timeoutSeconds: 540 },
+  async (req, res) => {
+    try {
+      const now = Date.now();
+      const horizon = Timestamp.fromMillis(now + 36 * 60 * 60 * 1000);
+
+      const snap = await db
+        .collection("matches")
+        .where("kickoff", ">=", Timestamp.fromMillis(now))
+        .where("kickoff", "<=", horizon)
+        .get();
+
+      const upcoming = snap.docs.filter((d) => {
+        const s = d.data().status;
+        return s === "SCHEDULED" || s === "TIMED";
+      });
+
+      if (!upcoming.length) {
+        res.json({ ok: true, message: "No upcoming matches in next 36h" });
+        return;
+      }
+
+      const [standings, oddsEvents] = await Promise.all([
+        getStandings(),
+        getEPLOdds(),
+      ]);
+
+      const results = [];
+      for (const doc of upcoming) {
+        const m = doc.data();
+        try {
+          const result = await runFullAnalysis(m, standings, oddsEvents);
+          await doc.ref.update({
+            ...result,
+            analyzed: true,
+            analyzedAt: Timestamp.now(),
+          });
+          results.push({ match: `${m.home} vs ${m.away}`, pick: result.pick, confidence: result.confidence });
+        } catch (err) {
+          results.push({ match: `${m.home} vs ${m.away}`, error: err.message });
+        }
+      }
+
+      const recs = await computeAndSaveRecommendations();
+      res.json({ ok: true, analyzed: results.length, results, recommendations: recs });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
