@@ -25,5 +25,9 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    // 방문자 카운터만 클라이언트 쓰기 허용
+    match /stats/visits {
+      allow read, write: if true;
+    }
   }
 }
