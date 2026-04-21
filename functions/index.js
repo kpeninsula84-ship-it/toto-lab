@@ -353,18 +353,8 @@ export const collectInjuries = onSchedule(
     timeoutSeconds: 540,
   },
   async () => {
-    const now = Timestamp.now();
-    const snap = await db
-      .collection("matches")
-      .where("kickoff", ">=", now)
-      .get();
-
-    const teams = new Map();
-    for (const doc of snap.docs) {
-      const m = doc.data();
-      teams.set(m.homeId, m.home);
-      teams.set(m.awayId, m.away);
-    }
+    const standings = await getStandings();
+    const teams = new Map(standings.map((s) => [s.teamId, s.team]));
 
     console.log(`[injuries] collecting for ${teams.size} teams`);
 
