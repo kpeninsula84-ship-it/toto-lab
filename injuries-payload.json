@@ -1,0 +1,82 @@
+{
+  "Arsenal FC": {
+    "out": ["Merino (injury)", "Timber (injury)", "Saka (injury)", "Calafiori (injury)"],
+    "doubtful": ["Madueke (injury, limped off in CL)"]
+  },
+  "Manchester City FC": {
+    "out": ["Gvardiol (tibia fracture, surgery, long-term)"],
+    "doubtful": ["Rodri (groin)", "Dias (fitness)", "Stones (fitness)", "O'Reilly (fitness)"]
+  },
+  "Liverpool FC": {
+    "out": ["Ekitike (Achilles rupture, season over)", "Alisson (hamstring)", "Conor Bradley (long-term)", "Giovanni Leoni (long-term)", "Wataru Endo (foot, long-term)"],
+    "doubtful": ["Joe Gomez (muscle)"]
+  },
+  "Chelsea FC": {
+    "out": ["Reece James (hamstring, out until May 4)", "Mykhaylo Mudryk (doping ban)", "Filip Jorgensen (groin)"],
+    "doubtful": ["Estevao (hamstring)", "Enzo Fernandez (cramp)", "Levi Colwill (returning from ACL)"]
+  },
+  "Manchester United FC": {
+    "out": ["Matthijs de Ligt (back, long-term)", "Lisandro Martinez (suspended)", "Harry Maguire (suspended)", "Leny Yoro (injury)"],
+    "doubtful": ["Patrick Dorgu (hamstring, possible return Apr 27)", "Kobbie Mainoo (injury)"]
+  },
+  "Tottenham Hotspur FC": {
+    "out": ["Cristian Romero (season-ending)", "Mohammed Kudus (season-ending)", "Guglielmo Vicario (minor operation)"],
+    "doubtful": ["Ben Davies (ankle, possible return Apr 25)"]
+  },
+  "Newcastle United FC": {
+    "out": ["Joelinton (2-match suspension)"],
+    "doubtful": []
+  },
+  "Aston Villa FC": {
+    "out": ["Boubacar Kamara (season out)"],
+    "doubtful": ["Youri Tielemans (returning)", "Emiliano Martinez (being monitored)", "Jadon Sancho (being monitored)"]
+  },
+  "Brighton & Hove Albion FC": {
+    "out": ["Lewis Dunk (suspended)"],
+    "doubtful": ["Diego Gomez (injury, off after 20 mins)"]
+  },
+  "West Ham United FC": {
+    "out": ["Maxwel Cornet (recovery delay)", "Emerson (groin/thigh)"],
+    "doubtful": ["Crysencio Summerville (injury concern)"]
+  },
+  "Crystal Palace FC": {
+    "out": [],
+    "doubtful": ["Adam Wharton (adductor)", "Maxence Lacroix (knee)", "Jean-Philippe Mateta (fitness)"]
+  },
+  "Fulham FC": {
+    "out": [],
+    "doubtful": ["Alex Iwobi (limped off in last match)"]
+  },
+  "Everton FC": {
+    "out": [],
+    "doubtful": []
+  },
+  "Nottingham Forest FC": {
+    "out": [],
+    "doubtful": ["Chris Wood (returning from 6-month injury)"]
+  },
+  "AFC Bournemouth": {
+    "out": ["Justin Kluivert (knee surgery)", "Tyler Adams (hamstring)"],
+    "doubtful": []
+  },
+  "Brentford FC": {
+    "out": ["Rico Henry (thigh)", "Antoni Milambo (knee)", "Fabio Carvalho (knee)", "Josh Dasilva (knee)", "Vitaly Janelt (ankle)"],
+    "doubtful": []
+  },
+  "Wolverhampton Wanderers FC": {
+    "out": [],
+    "doubtful": []
+  },
+  "Leeds United FC": {
+    "out": ["Anton Stach (ankle, out until May)", "Joe Rodon (ankle)"],
+    "doubtful": ["Daniel James (muscle)", "Jaka Bijol (fitness)", "Noah Okafor (fitness)", "Gabi Gudmundsson (fitness)"]
+  },
+  "Burnley FC": {
+    "out": ["Josh Cullen (knee)", "Josh Laurent (suspended)", "Jordan Beyer (thigh)", "Connor Roberts (calf)", "Hannibal Mejbri (thigh)"],
+    "doubtful": ["Zeki Amdouni (knee)", "Axel Tuanzebe (heel)"]
+  },
+  "Sunderland AFC": {
+    "out": [],
+    "doubtful": ["Reinildo (recovery)", "Enzo Le Fee (recovery)", "Nordi Mukiele (recovery)", "Dan Ballard (hamstring)"]
+  }
+}
