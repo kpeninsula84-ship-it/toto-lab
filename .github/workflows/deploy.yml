@@ -1,0 +1,30 @@
+name: Deploy to Firebase
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: functions/package-lock.json
+
+      - name: Install functions dependencies
+        run: npm install
+        working-directory: functions
+
+      - name: Deploy to Firebase
+        uses: w9jds/firebase-action@master
+        with:
+          args: deploy --only functions,hosting --project toto-lab
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
