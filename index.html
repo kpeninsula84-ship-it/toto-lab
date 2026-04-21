@@ -16,7 +16,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, collection, getDoc, getDocs, doc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getFirestore, collection, getDoc, getDocs, doc, query, orderBy, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyASY-tE9WfcUzFoZ3vCy5lQOX0m5g61A5A",
@@ -248,10 +248,40 @@
       return div;
     }
 
+    async function trackAndDisplayVisits() {
+      const today = new Date().toISOString().split("T")[0];
+      const storageKey = `totolab_visited_${today}`;
+      const ref = doc(db, "stats", "visits");
+
+      if (!localStorage.getItem(storageKey)) {
+        localStorage.setItem(storageKey, "1");
+        try {
+          await updateDoc(ref, {
+            total: increment(1),
+            [`daily.${today}`]: increment(1),
+          });
+        } catch {
+          // doc may not exist yet
+          await setDoc(ref, { total: 1, daily: { [today]: 1 } });
+        }
+      }
+
+      try {
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          const d = snap.data();
+          const todayCount = d.daily?.[today] ?? 0;
+          document.getElementById("visit-counter").textContent =
+            `👁 Today: ${todayCount} · Total: ${d.total ?? 0}`;
+        }
+      } catch {}
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
       loadRecommendations();
       loadMatches();
       loadStats();
+      trackAndDisplayVisits();
     });
   </script>
 </head>
@@ -269,8 +299,9 @@
     <section id="stats" class="mt-10"></section>
   </main>
   <footer class="border-t border-gray-800 py-6 px-4 mt-12">
-    <div class="max-w-4xl mx-auto text-center text-xs text-gray-600">
-      For informational purposes only. Not financial advice. Please gamble responsibly.
+    <div class="max-w-4xl mx-auto text-center text-xs text-gray-600 space-y-1">
+      <p id="visit-counter" class="text-gray-500"></p>
+      <p>For informational purposes only. Not financial advice. Please gamble responsibly.</p>
     </div>
   </footer>
 </body>
