@@ -43,6 +43,17 @@ function getOddsForPick(match) {
   return null;
 }
 
+function getProbForPick(match) {
+  const { pick } = match;
+  if (!pick) return null;
+  if (pick === "home") return match.probs?.home ?? null;
+  if (pick === "draw") return match.probs?.draw ?? null;
+  if (pick === "away") return match.probs?.away ?? null;
+  if (pick === "over25") return match.overUnder25?.over ?? null;
+  if (pick === "under25") return match.overUnder25?.under ?? null;
+  return null;
+}
+
 const FLAT_STAKE = 1000; // for ROI calc
 
 function didPickWin(pick, score) {
@@ -132,6 +143,13 @@ async function computeAndSaveRecommendations() {
     const pickOdds = getOddsForPick(m);
     if (!pickOdds) continue;
 
+    const pickProb = getProbForPick(m);
+    if (pickProb == null) continue;
+
+    // EV = expected return per unit stake, e.g. 0.26 means +26% expected profit.
+    // Captures both probability and odds magnitude, unlike raw edge.
+    const ev = (pickProb / 100) * pickOdds - 1;
+
     candidates.push({
       fixtureId: m.fixtureId,
       home: m.home,
@@ -140,9 +158,11 @@ async function computeAndSaveRecommendations() {
       pick: m.pick,
       pickLabel: PICK_LABEL[m.pick] || m.pick,
       odds: pickOdds,
+      prob: pickProb,
       edge: m.edge,
+      ev: Math.round(ev * 1000) / 10,
       confidence: m.confidence,
-      score: Math.round((m.edge * m.confidence) / 100),
+      score: Math.round(ev * m.confidence),
     });
   }
 

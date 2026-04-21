@@ -104,7 +104,7 @@
                   <h4 class="text-white font-semibold">${p.home} vs ${p.away}</h4>
                   <p class="text-green-400 text-sm mt-1">
                     <strong>${p.pickLabel}</strong> @${p.odds}
-                    <span class="text-gray-400 ml-2">· Edge +${p.edge}% · Conf ${p.confidence} · Score ${p.score}</span>
+                    <span class="text-gray-400 ml-2">· EV ${p.ev >= 0 ? "+" : ""}${p.ev}% · Edge +${p.edge}% · Conf ${p.confidence}</span>
                   </p>
                 </div>
               </div>`;
