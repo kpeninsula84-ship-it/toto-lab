@@ -344,10 +344,11 @@ export const collectResults = onSchedule(
   }
 );
 
-// Weekly Monday 09:00 KST — fetch injury/suspension status for all active EPL teams
+// Weekly Saturday 17:00 KST — fetch injury/suspension status for all active EPL teams
+// Runs 1 hour before analyzeDaily (18:00) when most weekend fixtures are analyzed
 export const collectInjuries = onSchedule(
   {
-    schedule: "0 9 * * 1",
+    schedule: "0 17 * * 6",
     timeZone: "Asia/Seoul",
     timeoutSeconds: 540,
   },
