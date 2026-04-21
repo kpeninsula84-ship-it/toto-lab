@@ -15,7 +15,11 @@ import { getEPLOdds, findOddsForMatch } from "./oddsApi.js";
 import { analyzeMatch, fetchTeamInjuries } from "./analyzer.js";
 
 initializeApp();
-setGlobalOptions({ region: "asia-northeast3", maxInstances: 5 });
+setGlobalOptions({
+  region: "asia-northeast3",
+  maxInstances: 5,
+  secrets: ["FOOTBALL_DATA_TOKEN", "ODDS_API_KEY", "ANTHROPIC_API_KEY"],
+});
 
 const db = getFirestore();
 const ARSENAL_TEAM_ID = 57; // football-data.org team id
