@@ -22,6 +22,14 @@ jobs:
         run: npm install
         working-directory: functions
 
+      - name: Create functions .env from secrets
+        run: |
+          cat > functions/.env <<EOF
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          FOOTBALL_DATA_TOKEN=${{ secrets.FOOTBALL_DATA_TOKEN }}
+          ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}
+          EOF
+
       - name: Deploy to Firebase
         uses: w9jds/firebase-action@master
         with:
