@@ -1,4 +1,4 @@
-# CLAUDE.md — [PROJECT_NAME]
+# CLAUDE.md — TotoLab
 
 ---
 
@@ -60,48 +60,101 @@ Tone: concise and confident, no excessive promotional language.
 
 ---
 
-<!-- PROJECT-SPECIFIC RULES BELOW -->
-
 ## Project overview
 
-<!-- What does this project do? One paragraph. -->
+TotoLab is a single-page web app that uses Claude Sonnet to analyse every upcoming EPL fixture and surface value bets. Firebase Functions run on a schedule to collect fixtures, request odds, inject injury data, call the Claude API, and write structured analysis back to Firestore. The frontend reads Firestore directly and renders picks, match cards, and a track-record dashboard.
 
 ## Folder structure
 
 ```
-<!-- Fill in the project folder structure -->
+toto-lab/
+├── index.html               # Frontend SPA (Tailwind CDN, Firebase SDK via CDN)
+├── firebase.json            # Hosting + Functions + Firestore config
+├── firestore.rules          # Security rules (public read, server-only write)
+├── firestore.indexes.json   # Composite indexes
+├── CLAUDE.md
+├── OPERATIONS.md            # Weekly manual injury-update runbook (Korean)
+├── ideas/                   # Feature idea drafts
+└── functions/
+    ├── index.js             # All Cloud Function exports
+    ├── analyzer.js          # Claude API call + prompt construction
+    ├── footballData.js      # football-data.org API wrapper
+    ├── oddsApi.js           # The Odds API wrapper
+    └── package.json
 ```
 
 ## Build and run
 
 ```bash
-<!-- Fill in build/run commands -->
+# Install function dependencies
+cd functions && npm install && cd ..
+
+# Local emulation (functions + firestore)
+firebase emulators:start
+
+# Deploy everything
+firebase deploy
+
+# Deploy functions only
+firebase deploy --only functions
+
+# Deploy hosting only
+firebase deploy --only hosting
 ```
+
+Required environment variables in `functions/.env` (local) or GitHub Secrets (CI):
+- `ANTHROPIC_API_KEY`
+- `FOOTBALL_DATA_TOKEN`
+- `ODDS_API_KEY`
 
 ## Screens
 
-<!-- List the main screens/pages of the app -->
+Single-page app (`index.html`):
+
+| Section | Description |
+|---|---|
+| Value Picks | Top recommendations for the current round (EV, edge, odds, acca) |
+| All Analysed Fixtures | Match cards with 1X2 + O/U probabilities, confidence badge, reasoning bullets |
+| Track Record | Hit rate, P&L (£10 flat stake), ROI, breakdown by pick type |
 
 ## Tech stack
 
 | Layer | Technology | Version |
 |---|---|---|
-| | | |
+| Frontend | Vanilla JS + Tailwind CSS (CDN) | Tailwind 3 |
+| Hosting | Firebase Hosting | — |
+| Database | Firestore | — |
+| Backend | Firebase Functions (Node.js ESM) | Node 22 |
+| AI | Anthropic Claude Sonnet via `@anthropic-ai/sdk` | ^0.40.0 |
+| Data — Fixtures | football-data.org API | v4 |
+| Data — Odds | The Odds API | v4 |
+| CI/CD | GitHub Actions | — |
 
 ## Key conventions
 
-<!-- Project-specific coding conventions, data rules, etc. -->
+- All Cloud Functions are in `functions/index.js`; business logic lives in the adjacent modules.
+- Functions use ESM (`"type": "module"` in package.json).
+- Pick thresholds are constants at the top of `index.js`: `EDGE_THRESHOLD`, `CONFIDENCE_THRESHOLD`, `MAX_PICKS`.
+- Injury data is stored in Firestore `injuries/{teamId}` and fetched inside `analyzer.js` before building the Claude prompt.
+- `ARSENAL_TEAM_ID = 57` is the hardcoded fan-team flag — set `isFanTeam: true` on Arsenal matches so the prompt enforces strict data-only reasoning.
+- Firestore `stats/summary` is the single document for all aggregate pick stats; `stats/visits` is the visitor counter (client-writable).
+- `recommendations/current` holds the active round's picks; overwritten each analysis run.
+- All monetary values stored in pence (integers) and displayed divided by 100.
 
 ## Known issues
 
 | Issue | Detail |
 |---|---|
-| | |
+| Injury team name mismatch | `updateInjuriesBulk` may match fewer than 20 teams if football-data.org uses suffixed names ("Arsenal FC" vs "Arsenal") |
+| No result auto-detection | `collectResults` only runs Sunday 09:00 KST — late Saturday results not picked up until then |
 
 ## Future features
 
 ### Must do
-- [ ] 
+- [ ] Telegram / email alert when new value picks are published
+- [ ] Historical pick archive (past rounds browsable on frontend)
 
 ### Nice to have
-- [ ] 
+- [ ] Multi-league support (La Liga, Bundesliga)
+- [ ] Confidence calibration chart (predicted vs actual win rate by confidence band)
+- [ ] User accounts with custom edge/confidence thresholds
