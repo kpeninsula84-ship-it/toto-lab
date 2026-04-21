@@ -1,13 +1,14 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TotoLab — EPL 베팅 분석</title>
+  <meta name="description" content="AI-powered EPL betting analysis. Claude analyses every Premier League fixture and flags value bets based on form, injuries, odds and expected value." />
+  <title>TotoLab — AI EPL Betting Analysis</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, collection, getDoc, getDocs, doc, query, orderBy, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getFirestore, collection, getDoc, getDocs, doc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyASY-tE9WfcUzFoZ3vCy5lQOX0m5g61A5A",
@@ -21,6 +22,14 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
+    const PICK_LABEL = {
+      home: "Home Win",
+      draw: "Draw",
+      away: "Away Win",
+      over25: "Over 2.5",
+      under25: "Under 2.5",
+    };
+
     async function loadStats() {
       const container = document.getElementById("stats");
       try {
@@ -32,7 +41,7 @@
         const s = snap.data();
         if (s.totalPicks === 0) {
           container.innerHTML = `
-            <p class="text-gray-500 text-sm text-center py-4">아직 결과 기록된 픽 없음</p>`;
+            <p class="text-gray-500 text-sm text-center py-4">No recorded picks yet.</p>`;
           return;
         }
         const byType = Object.entries(s.byPickType || {})
@@ -43,19 +52,19 @@
           .join(" ");
         const roiColor = s.roi > 0 ? "text-green-400" : s.roi < 0 ? "text-red-400" : "text-gray-400";
         container.innerHTML = `
-          <h3 class="text-lg font-bold text-white mb-3">📈 누적 성적</h3>
+          <h3 class="text-lg font-bold text-white mb-3">Track Record</h3>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div class="bg-gray-800 rounded p-3">
-              <p class="text-xs text-gray-400">총 픽</p>
+              <p class="text-xs text-gray-400">Total Picks</p>
               <p class="text-xl font-bold text-white">${s.totalPicks}</p>
             </div>
             <div class="bg-gray-800 rounded p-3">
-              <p class="text-xs text-gray-400">적중률</p>
+              <p class="text-xs text-gray-400">Hit Rate</p>
               <p class="text-xl font-bold text-white">${s.winRate}% <span class="text-xs text-gray-400">(${s.wins}W ${s.losses}L)</span></p>
             </div>
             <div class="bg-gray-800 rounded p-3">
-              <p class="text-xs text-gray-400">순손익 (1,000원 기준)</p>
-              <p class="text-xl font-bold ${roiColor}">${s.totalProfit >= 0 ? "+" : ""}${s.totalProfit.toLocaleString()}원</p>
+              <p class="text-xs text-gray-400">P&L (£10 flat stake)</p>
+              <p class="text-xl font-bold ${roiColor}">${s.totalProfit >= 0 ? "+" : ""}£${(s.totalProfit / 100).toFixed(2)}</p>
             </div>
             <div class="bg-gray-800 rounded p-3">
               <p class="text-xs text-gray-400">ROI</p>
@@ -65,7 +74,7 @@
           ${byType ? `<div class="mt-3 flex flex-wrap gap-2">${byType}</div>` : ""}
         `;
       } catch (err) {
-        container.innerHTML = `<p class="text-red-400 text-sm text-center py-4">통계 로딩 실패: ${err.message}</p>`;
+        container.innerHTML = `<p class="text-red-400 text-sm text-center py-4">Failed to load stats: ${err.message}</p>`;
       }
     }
 
@@ -74,7 +83,7 @@
       try {
         const snap = await getDoc(doc(db, "recommendations", "current"));
         if (!snap.exists()) {
-          container.innerHTML = `<p class="text-gray-500 text-sm text-center py-4">추천 데이터 없음. 다음 분석 스케줄 대기 중.</p>`;
+          container.innerHTML = `<p class="text-gray-500 text-sm text-center py-4">No recommendations yet. Waiting for next analysis run.</p>`;
           return;
         }
         const rec = snap.data();
@@ -82,10 +91,10 @@
         if (rec.pickCount === 0) {
           container.innerHTML = `
             <div class="bg-yellow-900/30 border border-yellow-700 rounded-lg p-5">
-              <h3 class="text-lg font-bold text-yellow-300 mb-2">🟡 이번엔 베팅 패스 권고</h3>
+              <h3 class="text-lg font-bold text-yellow-300 mb-2">No Value Bets This Round</h3>
               <p class="text-sm text-gray-300">
-                분석 ${rec.totalAnalyzed}경기 중 기준(Edge ≥ ${rec.threshold.edge}%, Confidence ≥ ${rec.threshold.confidence}) 통과 0개.
-                시장이 효율적으로 형성됐거나 데이터 불확실성이 큽니다.
+                Analysed ${rec.totalAnalyzed} fixtures — none cleared the threshold (Edge ≥ ${rec.threshold.edge}%, Confidence ≥ ${rec.threshold.confidence}).
+                The market looks efficiently priced or data uncertainty is high.
               </p>
             </div>`;
           return;
@@ -100,10 +109,10 @@
               <div class="bg-gray-800 border border-green-600/50 rounded-lg p-4 flex items-start gap-3">
                 <div class="text-2xl font-bold text-green-400 w-8">${i + 1}</div>
                 <div class="flex-1">
-                  <p class="text-xs text-gray-400">${kickoff.toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+                  <p class="text-xs text-gray-400">${kickoff.toLocaleString("en-GB", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
                   <h4 class="text-white font-semibold">${p.home} vs ${p.away}</h4>
                   <p class="text-green-400 text-sm mt-1">
-                    <strong>${p.pickLabel}</strong> @${p.odds}
+                    <strong>${PICK_LABEL[p.pick] || p.pick}</strong> @${p.odds}
                     <span class="text-gray-400 ml-2">· EV ${p.ev >= 0 ? "+" : ""}${p.ev}% · Edge +${p.edge}% · Conf ${p.confidence}</span>
                   </p>
                 </div>
@@ -112,57 +121,49 @@
           .join("");
 
         const comboInfo = rec.comboOdds
-          ? `<p class="text-sm text-gray-400 mt-3">참고: ${rec.pickCount}픽 조합 배당 <strong class="text-green-400">${rec.comboOdds}x</strong> (5,000원 적중 시 ${Math.round(5000 * rec.comboOdds).toLocaleString()}원)</p>`
-          : `<p class="text-sm text-gray-400 mt-3">참고: 단독 베팅 추천</p>`;
+          ? `<p class="text-sm text-gray-400 mt-3">Acca odds: <strong class="text-green-400">${rec.comboOdds}x</strong> (£10 returns £${(10 * rec.comboOdds).toFixed(2)})</p>`
+          : `<p class="text-sm text-gray-400 mt-3">Singles recommended.</p>`;
 
         container.innerHTML = `
           <div class="mb-3 flex justify-between items-baseline">
-            <h3 class="text-lg font-bold text-white">🎯 추천 (${rec.pickCount}경기)</h3>
-            <p class="text-xs text-gray-500">분석 ${rec.totalAnalyzed} · 통과 ${rec.totalPassed}</p>
+            <h3 class="text-lg font-bold text-white">Value Picks (${rec.pickCount})</h3>
+            <p class="text-xs text-gray-500">Analysed ${rec.totalAnalyzed} · Passed ${rec.totalPassed}</p>
           </div>
           <div class="space-y-2">${picksHtml}</div>
           ${comboInfo}
         `;
       } catch (err) {
-        container.innerHTML = `<p class="text-red-400 text-sm text-center py-4">추천 로딩 실패: ${err.message}</p>`;
+        container.innerHTML = `<p class="text-red-400 text-sm text-center py-4">Failed to load picks: ${err.message}</p>`;
       }
     }
 
     async function loadMatches() {
       const container = document.getElementById("matches");
-      container.innerHTML = `<p class="text-gray-400 text-center py-12">데이터 수집 대기 중...</p>`;
+      container.innerHTML = `<p class="text-gray-400 text-center py-12">Loading fixtures...</p>`;
 
       try {
         const q = query(collection(db, "matches"), orderBy("kickoff", "asc"));
         const snap = await getDocs(q);
 
         if (snap.empty) {
-          container.innerHTML = `<p class="text-gray-400 text-center py-12">아직 분석된 경기가 없습니다. 스케줄러가 돌면 여기에 나타납니다.</p>`;
+          container.innerHTML = `<p class="text-gray-400 text-center py-12">No fixtures analysed yet. Check back soon.</p>`;
           return;
         }
 
         container.innerHTML = "";
         snap.forEach((doc) => {
-          const m = doc.data();
-          container.appendChild(renderMatchCard(m));
+          container.appendChild(renderMatchCard(doc.data()));
         });
       } catch (err) {
-        container.innerHTML = `<p class="text-red-400 text-center py-12">로딩 실패: ${err.message}</p>`;
+        container.innerHTML = `<p class="text-red-400 text-center py-12">Failed to load: ${err.message}</p>`;
       }
     }
-
-    const PICK_LABEL = {
-      home: "홈 승",
-      draw: "무승부",
-      away: "원정 승",
-      over25: "2.5 오버",
-      under25: "2.5 언더",
-    };
 
     function formatKickoff(ts) {
       if (!ts) return "-";
       const date = ts.toDate ? ts.toDate() : new Date(ts);
-      return date.toLocaleString("ko-KR", {
+      return date.toLocaleString("en-GB", {
+        weekday: "short",
         month: "short",
         day: "numeric",
         hour: "2-digit",
@@ -181,7 +182,7 @@
       const div = document.createElement("div");
       div.className = "bg-gray-800 rounded-lg p-5 shadow hover:shadow-lg transition";
       const fanBadge = m.isFanTeam
-        ? `<span class="text-xs px-2 py-1 rounded bg-red-600 text-white ml-2">🔴 팬팀</span>`
+        ? `<span class="text-xs px-2 py-1 rounded bg-red-600 text-white ml-2">Fan Team</span>`
         : "";
       const reasoningList = (m.reasoning || [])
         .map((r) => `<li class="text-xs text-gray-300 leading-relaxed">• ${r}</li>`)
@@ -194,20 +195,20 @@
             <h3 class="text-lg font-bold text-white mt-1">${m.home} vs ${m.away}${fanBadge}</h3>
           </div>
           <span class="text-xs px-2 py-1 rounded ${confidenceColor(m.confidence)} text-white whitespace-nowrap">
-            Confidence ${m.confidence ?? "-"}
+            Conf ${m.confidence ?? "-"}
           </span>
         </div>
         <div class="grid grid-cols-3 gap-2 text-center text-sm my-3">
           <div class="bg-gray-900 rounded py-2">
-            <p class="text-gray-400 text-xs">홈 승</p>
+            <p class="text-gray-400 text-xs">Home</p>
             <p class="text-white font-semibold">${m.probs?.home ?? "-"}%</p>
           </div>
           <div class="bg-gray-900 rounded py-2">
-            <p class="text-gray-400 text-xs">무</p>
+            <p class="text-gray-400 text-xs">Draw</p>
             <p class="text-white font-semibold">${m.probs?.draw ?? "-"}%</p>
           </div>
           <div class="bg-gray-900 rounded py-2">
-            <p class="text-gray-400 text-xs">원정 승</p>
+            <p class="text-gray-400 text-xs">Away</p>
             <p class="text-white font-semibold">${m.probs?.away ?? "-"}%</p>
           </div>
         </div>
@@ -215,11 +216,11 @@
           m.overUnder25
             ? `<div class="grid grid-cols-2 gap-2 text-center text-sm mb-3">
                 <div class="bg-gray-900 rounded py-2">
-                  <p class="text-gray-400 text-xs">오버 2.5</p>
+                  <p class="text-gray-400 text-xs">Over 2.5</p>
                   <p class="text-white font-semibold">${m.overUnder25.over}%</p>
                 </div>
                 <div class="bg-gray-900 rounded py-2">
-                  <p class="text-gray-400 text-xs">언더 2.5</p>
+                  <p class="text-gray-400 text-xs">Under 2.5</p>
                   <p class="text-white font-semibold">${m.overUnder25.under}%</p>
                 </div>
               </div>`
@@ -228,11 +229,11 @@
         ${
           m.pick
             ? `<div class="mt-3 p-2 bg-green-900/40 border border-green-600 rounded text-sm text-green-300">
-                ✓ 추천: <strong>${PICK_LABEL[m.pick] || m.pick}</strong> (Edge +${m.edge}%)
+                ✓ Pick: <strong>${PICK_LABEL[m.pick] || m.pick}</strong> · Edge +${m.edge}% · EV +${m.ev ?? "-"}%
               </div>`
             : m.analyzed
-            ? `<div class="mt-3 text-sm text-gray-500">추천 없음 (Edge &lt; 5%)</div>`
-            : `<div class="mt-3 text-sm text-gray-500">분석 대기 중 (경기 1시간 전)</div>`
+            ? `<div class="mt-3 text-sm text-gray-500">No value bet (Edge &lt; 5%)</div>`
+            : `<div class="mt-3 text-sm text-gray-500">Analysis pending</div>`
         }
         ${reasoningList ? `<ul class="mt-3 space-y-1">${reasoningList}</ul>` : ""}
       `;
@@ -250,14 +251,19 @@
   <header class="border-b border-gray-800 py-6 px-4">
     <div class="max-w-4xl mx-auto">
       <h1 class="text-2xl font-bold">⚽ TotoLab</h1>
-      <p class="text-sm text-gray-400">EPL 경기 데이터 기반 베팅 분석</p>
+      <p class="text-sm text-gray-400">AI-powered EPL betting analysis · Updated daily</p>
     </div>
   </header>
   <main class="max-w-4xl mx-auto px-4 py-8">
     <section id="recommendations" class="mb-8"></section>
-    <h2 class="text-xl font-semibold mb-4">전체 분석 경기</h2>
+    <h2 class="text-xl font-semibold mb-4">All Analysed Fixtures</h2>
     <div id="matches" class="grid gap-4"></div>
     <section id="stats" class="mt-10"></section>
   </main>
+  <footer class="border-t border-gray-800 py-6 px-4 mt-12">
+    <div class="max-w-4xl mx-auto text-center text-xs text-gray-600">
+      For informational purposes only. Not financial advice. Please gamble responsibly.
+    </div>
+  </footer>
 </body>
 </html>
