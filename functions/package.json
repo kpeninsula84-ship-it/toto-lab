@@ -2,7 +2,7 @@
   "name": "toto-lab-functions",
   "description": "TotoLab backend - data collection & Claude analysis",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "type": "module",
