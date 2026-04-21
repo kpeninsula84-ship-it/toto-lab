@@ -34,7 +34,11 @@ Only flag players important enough to move probabilities (top scorers, key defen
 
 5. **Bookmaker odds**: implied = 100 / decimal_odds. Edge = your_prob - implied.
 
-6. **Key player status**: if a top scorer is OUT, reduce their team's goal probability.
+6. **Key player status**: assess IMPACT by position type, not just absence:
+   - Striker/playmaker OUT → significant only if no quality backup exists in squad
+   - Fullback OUT → check if versatile players (CB or MF) can cover adequately; if yes, reduce impact significantly
+   - Explicitly reason: "X is OUT but Y can cover at LB — limited impact" or "X is OUT with no adequate backup — attack weakened"
+   - Only apply probability penalty if backup quality is meaningfully lower than the starter
 
 === OUTPUT RULES ===
 - 1X2 probabilities sum to 100. Over/Under 2.5 probabilities sum to 100.
