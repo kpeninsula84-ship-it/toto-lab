@@ -251,7 +251,7 @@
 
     async function trackAndDisplayVisits() {
       const today = new Date().toISOString().split("T")[0];
-      const storageKey = `totolab_visited_${today}`;
+      const storageKey = `totolab_v2_visited_${today}`;
       const ref = doc(db, "stats", "visits");
 
       if (!localStorage.getItem(storageKey)) {
