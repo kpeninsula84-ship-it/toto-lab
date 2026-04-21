@@ -12,7 +12,7 @@ import {
   getFinishedMatches,
 } from "./footballData.js";
 import { getEPLOdds, findOddsForMatch } from "./oddsApi.js";
-import { analyzeMatch } from "./analyzer.js";
+import { analyzeMatch, fetchTeamInjuries } from "./analyzer.js";
 
 initializeApp();
 setGlobalOptions({ region: "asia-northeast3", maxInstances: 5 });
@@ -344,6 +344,38 @@ export const collectResults = onSchedule(
   }
 );
 
+// Weekly Saturday 17:00 KST — fetch injury/suspension status for all active EPL teams
+// Runs 1 hour before analyzeDaily (18:00) when most weekend fixtures are analyzed
+export const collectInjuries = onSchedule(
+  {
+    schedule: "0 17 * * 6",
+    timeZone: "Asia/Seoul",
+    timeoutSeconds: 540,
+  },
+  async () => {
+    const standings = await getStandings();
+    const teams = new Map(standings.map((s) => [s.teamId, s.team]));
+
+    console.log(`[injuries] collecting for ${teams.size} teams`);
+
+    for (const [teamId, teamName] of teams) {
+      try {
+        const injuries = await fetchTeamInjuries(teamName);
+        await db.collection("injuries").doc(String(teamId)).set({
+          teamId,
+          teamName,
+          updatedAt: Timestamp.now(),
+          out: injuries.out || [],
+          doubtful: injuries.doubtful || [],
+        });
+        console.log(`[injuries] ${teamName} — out=${injuries.out?.length ?? 0} doubtful=${injuries.doubtful?.length ?? 0}`);
+      } catch (err) {
+        console.error(`[injuries] failed for ${teamName}:`, err.message);
+      }
+    }
+  }
+);
+
 // Manual HTTP trigger for collecting results
 export const collectResultsManual = onRequest(
   { invoker: "public", timeoutSeconds: 120 },
@@ -419,13 +451,15 @@ export const analyzeManual = onRequest(
 );
 
 async function runFullAnalysis(match, standings, oddsEvents) {
-  const [homeRecent, awayRecent, homeUpcoming, awayUpcoming, h2h] =
+  const [homeRecent, awayRecent, homeUpcoming, awayUpcoming, h2h, homeInjuryDoc, awayInjuryDoc] =
     await Promise.all([
-      getTeamRecentMatches(match.homeId, 10),
-      getTeamRecentMatches(match.awayId, 10),
+      getTeamRecentMatches(match.homeId, 5),
+      getTeamRecentMatches(match.awayId, 5),
       getTeamUpcomingFixtures(match.homeId, 5),
       getTeamUpcomingFixtures(match.awayId, 5),
       getHeadToHead(match.fixtureId, 5),
+      db.collection("injuries").doc(String(match.homeId)).get(),
+      db.collection("injuries").doc(String(match.awayId)).get(),
     ]);
 
   const homeStanding = standings.find((s) => s.teamId === match.homeId);
@@ -450,6 +484,8 @@ async function runFullAnalysis(match, standings, oddsEvents) {
     homeStanding,
     awayStanding,
     odds,
+    homeInjuries: homeInjuryDoc.exists ? homeInjuryDoc.data() : null,
+    awayInjuries: awayInjuryDoc.exists ? awayInjuryDoc.data() : null,
     isFanTeam:
       match.homeId === ARSENAL_TEAM_ID || match.awayId === ARSENAL_TEAM_ID,
   });

@@ -6,23 +6,16 @@ const SYSTEM_PROMPT = `You are a soccer betting analyst for the English Premier 
 
 ⚠️ TIMING: This analysis runs ~12-36 hours before kickoff. Official STARTING LINEUPS are NOT yet available (announced 1h before match). DO NOT attempt to predict who starts.
 
-=== WEB SEARCH RULES (you have web_search tool, max 2 uses) ===
+=== INJURY & SUSPENSION DATA ===
+Injury and suspension data is pre-fetched and provided in the prompt.
+Use it directly — do NOT search for additional injury info.
 
-ALLOWED searches:
-- "{team} injury news" — find injured/unavailable players
-- "{team} suspension" — find banned players
-- "{team} latest team news" — general status
-
-FORBIDDEN searches:
-- "{team} predicted lineup" / "starting XI" — unreliable this far out
-- Guessing who will be in the starting 11
-
-Classify each key player status into EXACTLY ONE bucket:
+Classify each key player into EXACTLY ONE bucket based on provided data:
 - **OUT**: confirmed unavailable (long-term injury, suspension, ruled out)
 - **DOUBTFUL**: fitness uncertain, could play or not
 - **AVAILABLE**: expected to be in squad (don't assume starter)
 
-Only flag players important enough to move probabilities (top scorers, key defenders, creative midfielders). Don't list every reserve player.
+Only flag players important enough to move probabilities (top scorers, key defenders, creative midfielders).
 
 === MANDATORY ANALYSIS CHECKS ===
 
@@ -41,7 +34,11 @@ Only flag players important enough to move probabilities (top scorers, key defen
 
 5. **Bookmaker odds**: implied = 100 / decimal_odds. Edge = your_prob - implied.
 
-6. **Key player status** (from web_search): if a top scorer is OUT, reduce their team's goal probability.
+6. **Key player status**: assess IMPACT by position type, not just absence:
+   - Striker/playmaker OUT → significant only if no quality backup exists in squad
+   - Fullback OUT → check if versatile players (CB or MF) can cover adequately; if yes, reduce impact significantly
+   - Explicitly reason: "X is OUT but Y can cover at LB — limited impact" or "X is OUT with no adequate backup — attack weakened"
+   - Only apply probability penalty if backup quality is meaningfully lower than the starter
 
 === OUTPUT RULES ===
 - 1X2 probabilities sum to 100. Over/Under 2.5 probabilities sum to 100.
@@ -92,29 +89,17 @@ const OUTPUT_SCHEMA = {
 
 export async function analyzeMatch(data) {
   const userContent = buildUserPrompt(data);
-  const messages = [{ role: "user", content: userContent }];
   const params = {
     model: "claude-sonnet-4-6",
-    max_tokens: 3072,
+    max_tokens: 1024,
     system: SYSTEM_PROMPT,
-    messages,
-    tools: [
-      { type: "web_search_20260209", name: "web_search", max_uses: 2 },
-    ],
+    messages: [{ role: "user", content: userContent }],
     output_config: {
       format: { type: "json_schema", schema: OUTPUT_SCHEMA },
     },
   };
 
-  let response = await client.messages.create(params);
-
-  // Server-side tool may pause; resume up to 2 times
-  let resumes = 0;
-  while (response.stop_reason === "pause_turn" && resumes < 2) {
-    messages.push({ role: "assistant", content: response.content });
-    response = await client.messages.create({ ...params, messages });
-    resumes++;
-  }
+  const response = await client.messages.create(params);
 
   const textBlock = response.content.find((b) => b.type === "text");
   if (!textBlock) throw new Error("No text response from Claude");
@@ -142,35 +127,83 @@ export async function analyzeMatch(data) {
   };
 }
 
+export async function fetchTeamInjuries(teamName) {
+  const params = {
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 512,
+    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }],
+    messages: [
+      {
+        role: "user",
+        content: `Search "${teamName} injury news Premier League" and extract current injury and suspension status. Return ONLY this JSON (no markdown, no explanation):
+{"out":["name (reason)"],"doubtful":["name (reason)"]}
+Only include players important enough to affect match results.`,
+      },
+    ],
+  };
+
+  let response = await client.messages.create(params);
+  const messages = [...params.messages];
+
+  let resumes = 0;
+  while (response.stop_reason === "pause_turn" && resumes < 3) {
+    messages.push({ role: "assistant", content: response.content });
+    response = await client.messages.create({ ...params, messages });
+    resumes++;
+  }
+
+  const textBlock = response.content.find((b) => b.type === "text");
+  if (!textBlock) return { out: [], doubtful: [] };
+
+  try {
+    return JSON.parse(textBlock.text);
+  } catch {
+    return { out: [], doubtful: [] };
+  }
+}
+
 function buildUserPrompt(data) {
+  const homeOut = (data.homeInjuries?.out || []).join(", ") || "none reported";
+  const homeDoubtful = (data.homeInjuries?.doubtful || []).join(", ") || "none reported";
+  const awayOut = (data.awayInjuries?.out || []).join(", ") || "none reported";
+  const awayDoubtful = (data.awayInjuries?.doubtful || []).join(", ") || "none reported";
+
   return `Match: ${data.home} (home) vs ${data.away} (away)
 Kickoff: ${data.kickoff}
 Hours until kickoff: ${data.hoursToKickoff}
 fan_team: ${data.isFanTeam ? "true — STAY OBJECTIVE" : "false"}
 
 === BOOKMAKER ODDS (${data.odds?.bookmaker || "none"}) ===
-${JSON.stringify(data.odds, null, 2)}
+${JSON.stringify(data.odds)}
 
 === ${data.home} — CURRENT STANDING ===
-${JSON.stringify(data.homeStanding, null, 2)}
+${JSON.stringify(data.homeStanding)}
 
 === ${data.away} — CURRENT STANDING ===
-${JSON.stringify(data.awayStanding, null, 2)}
+${JSON.stringify(data.awayStanding)}
 
-=== ${data.home} — LAST 10 MATCHES (all competitions) ===
-${JSON.stringify(data.homeRecent, null, 2)}
+=== ${data.home} — INJURY STATUS ===
+OUT: ${homeOut}
+DOUBTFUL: ${homeDoubtful}
+
+=== ${data.away} — INJURY STATUS ===
+OUT: ${awayOut}
+DOUBTFUL: ${awayDoubtful}
+
+=== ${data.home} — LAST 5 MATCHES (all competitions) ===
+${JSON.stringify(data.homeRecent)}
 
 === ${data.home} — NEXT 5 FIXTURES (rotation risk check) ===
-${JSON.stringify(data.homeUpcoming, null, 2)}
+${JSON.stringify(data.homeUpcoming)}
 
-=== ${data.away} — LAST 10 MATCHES (all competitions) ===
-${JSON.stringify(data.awayRecent, null, 2)}
+=== ${data.away} — LAST 5 MATCHES (all competitions) ===
+${JSON.stringify(data.awayRecent)}
 
 === ${data.away} — NEXT 5 FIXTURES (rotation risk check) ===
-${JSON.stringify(data.awayUpcoming, null, 2)}
+${JSON.stringify(data.awayUpcoming)}
 
 === HEAD TO HEAD (last 5) ===
-${JSON.stringify(data.h2h, null, 2)}
+${JSON.stringify(data.h2h)}
 
 Analyze per the mandatory checks. Return JSON per schema.`;
 }
