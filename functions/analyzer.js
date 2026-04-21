@@ -142,13 +142,29 @@ Only include players important enough to affect match results.`,
     ],
   };
 
-  let response = await client.messages.create(params);
+  const callWithRetry = async (p) => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        return await client.messages.create(p);
+      } catch (err) {
+        if (err.status === 429 && attempt < 3) {
+          const wait = (attempt + 1) * 15000; // 15s, 30s, 45s
+          console.log(`[injuries] 429 for ${teamName}, retrying in ${wait / 1000}s`);
+          await new Promise((r) => setTimeout(r, wait));
+        } else {
+          throw err;
+        }
+      }
+    }
+  };
+
+  let response = await callWithRetry(params);
   const messages = [...params.messages];
 
   let resumes = 0;
   while (response.stop_reason === "pause_turn" && resumes < 3) {
     messages.push({ role: "assistant", content: response.content });
-    response = await client.messages.create({ ...params, messages });
+    response = await callWithRetry({ ...params, messages });
     resumes++;
   }
 
