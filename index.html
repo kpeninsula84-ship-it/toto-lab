@@ -254,15 +254,17 @@
       const ref = doc(db, "stats", "visits");
 
       if (!localStorage.getItem(storageKey)) {
-        localStorage.setItem(storageKey, "1");
         try {
           await updateDoc(ref, {
             total: increment(1),
             [`daily.${today}`]: increment(1),
           });
+          localStorage.setItem(storageKey, "1");
         } catch {
-          // doc may not exist yet
-          await setDoc(ref, { total: 1, daily: { [today]: 1 } });
+          try {
+            await setDoc(ref, { total: 1, daily: { [today]: 1 } });
+            localStorage.setItem(storageKey, "1");
+          } catch {}
         }
       }
 
