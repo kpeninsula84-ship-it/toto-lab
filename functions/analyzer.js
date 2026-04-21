@@ -129,7 +129,7 @@ export async function analyzeMatch(data) {
 
 export async function fetchTeamInjuries(teamName) {
   const params = {
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-sonnet-4-6",
     max_tokens: 512,
     tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }],
     messages: [
