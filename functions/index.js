@@ -376,6 +376,41 @@ export const collectInjuries = onSchedule(
   }
 );
 
+// Manual HTTP trigger for collecting injuries
+export const collectInjuriesManual = onRequest(
+  { invoker: "public", timeoutSeconds: 540 },
+  async (req, res) => {
+    try {
+      const standings = await getStandings();
+      const teams = new Map(standings.map((s) => [s.teamId, s.team]));
+
+      console.log(`[injuries-manual] collecting for ${teams.size} teams`);
+
+      const results = [];
+      for (const [teamId, teamName] of teams) {
+        try {
+          const injuries = await fetchTeamInjuries(teamName);
+          await db.collection("injuries").doc(String(teamId)).set({
+            teamId,
+            teamName,
+            updatedAt: Timestamp.now(),
+            out: injuries.out || [],
+            doubtful: injuries.doubtful || [],
+          });
+          results.push({ teamName, out: injuries.out?.length ?? 0, doubtful: injuries.doubtful?.length ?? 0 });
+        } catch (err) {
+          results.push({ teamName, error: err.message });
+        }
+      }
+
+      res.json({ ok: true, teams: teams.size, results });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
 // Manual HTTP trigger for collecting results
 export const collectResultsManual = onRequest(
   { invoker: "public", timeoutSeconds: 120 },
