@@ -372,6 +372,7 @@ export const collectInjuries = onSchedule(
       } catch (err) {
         console.error(`[injuries] failed for ${teamName}:`, err.message);
       }
+      await new Promise((r) => setTimeout(r, 3000));
     }
   }
 );
@@ -401,6 +402,7 @@ export const collectInjuriesManual = onRequest(
         } catch (err) {
           results.push({ teamName, error: err.message });
         }
+        await new Promise((r) => setTimeout(r, 3000));
       }
 
       res.json({ ok: true, teams: teams.size, results });
