@@ -413,6 +413,49 @@ export const collectInjuriesManual = onRequest(
   }
 );
 
+// Manual bulk upload of pre-searched injury data.
+// POST body: { "Arsenal FC": { out: ["name (reason)"], doubtful: [...] }, ... }
+export const updateInjuriesBulk = onRequest(
+  { invoker: "public", timeoutSeconds: 120 },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "POST required" });
+      return;
+    }
+    try {
+      const payload = req.body || {};
+      const standings = await getStandings();
+      const nameToId = new Map(standings.map((s) => [s.team, s.teamId]));
+
+      const results = [];
+      for (const [teamName, data] of Object.entries(payload)) {
+        const teamId = nameToId.get(teamName);
+        if (!teamId) {
+          results.push({ teamName, error: "team not found in standings" });
+          continue;
+        }
+        await db.collection("injuries").doc(String(teamId)).set({
+          teamId,
+          teamName,
+          updatedAt: Timestamp.now(),
+          out: Array.isArray(data.out) ? data.out : [],
+          doubtful: Array.isArray(data.doubtful) ? data.doubtful : [],
+        });
+        results.push({
+          teamName,
+          out: data.out?.length ?? 0,
+          doubtful: data.doubtful?.length ?? 0,
+        });
+      }
+
+      res.json({ ok: true, updated: results.length, results });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
 // Manual HTTP trigger for collecting results
 export const collectResultsManual = onRequest(
   { invoker: "public", timeoutSeconds: 120 },
