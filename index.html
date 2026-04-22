@@ -17,7 +17,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, collection, getDoc, getDocs, doc, query, orderBy, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getFirestore, collection, getDoc, getDocs, doc, query, where, orderBy, Timestamp, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyASY-tE9WfcUzFoZ3vCy5lQOX0m5g61A5A",
@@ -35,6 +35,8 @@
       home: "Home Win",
       draw: "Draw",
       away: "Away Win",
+      over: "Over",
+      under: "Under",
       over25: "Over 2.5",
       under25: "Under 2.5",
     };
@@ -151,7 +153,16 @@
       container.innerHTML = `<p class="text-gray-400 text-center py-12">Loading fixtures...</p>`;
 
       try {
-        const q = query(collection(db, "matches"), orderBy("kickoff", "asc"));
+        const now = Date.now();
+        const from = Timestamp.fromMillis(now - 24 * 60 * 60 * 1000);
+        const to = Timestamp.fromMillis(now + 4 * 24 * 60 * 60 * 1000);
+
+        const q = query(
+          collection(db, "matches"),
+          where("kickoff", ">=", from),
+          where("kickoff", "<=", to),
+          orderBy("kickoff", "asc")
+        );
         const snap = await getDocs(q);
 
         if (snap.empty) {
@@ -159,10 +170,29 @@
           return;
         }
 
-        container.innerHTML = "";
+        const nowTs = Timestamp.fromMillis(now);
+        const upcoming = [];
+        const finished = [];
         snap.forEach((doc) => {
-          container.appendChild(renderMatchCard(doc.data()));
+          const m = doc.data();
+          if (m.kickoff.toMillis() >= now) {
+            upcoming.push(m);
+          } else {
+            finished.push(m);
+          }
         });
+
+        // finished: most recently kicked off first
+        finished.sort((a, b) => b.kickoff.toMillis() - a.kickoff.toMillis());
+
+        container.innerHTML = "";
+        for (const m of [...upcoming, ...finished]) {
+          container.appendChild(renderMatchCard(m));
+        }
+
+        if (upcoming.length === 0 && finished.length === 0) {
+          container.innerHTML = `<p class="text-gray-400 text-center py-12">No fixtures analysed yet. Check back soon.</p>`;
+        }
       } catch (err) {
         container.innerHTML = `<p class="text-red-400 text-center py-12">Failed to load: ${err.message}</p>`;
       }
@@ -222,17 +252,21 @@
           </div>
         </div>
         ${
-          m.overUnder25
-            ? `<div class="grid grid-cols-2 gap-2 text-center text-sm mb-3">
+          (m.overUnder || m.overUnder25)
+            ? (() => {
+                const ou = m.overUnder || m.overUnder25;
+                const line = m.ouLine ?? 2.5;
+                return `<div class="grid grid-cols-2 gap-2 text-center text-sm mb-3">
                 <div class="bg-gray-900 rounded py-2">
-                  <p class="text-gray-400 text-xs">Over 2.5</p>
-                  <p class="text-white font-semibold">${m.overUnder25.over}%</p>
+                  <p class="text-gray-400 text-xs">Over ${line}</p>
+                  <p class="text-white font-semibold">${ou.over}%</p>
                 </div>
                 <div class="bg-gray-900 rounded py-2">
-                  <p class="text-gray-400 text-xs">Under 2.5</p>
-                  <p class="text-white font-semibold">${m.overUnder25.under}%</p>
+                  <p class="text-gray-400 text-xs">Under ${line}</p>
+                  <p class="text-white font-semibold">${ou.under}%</p>
                 </div>
-              </div>`
+              </div>`;
+              })()
             : ""
         }
         ${
