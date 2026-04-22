@@ -296,10 +296,10 @@ async function runScheduledAnalysis(horizonHours, label) {
   await computeAndSaveRecommendations();
 }
 
-// Mon–Fri 18:00 KST — analyze EPL matches in next 24 hours
+// Mon–Fri 12:00 KST — analyze EPL matches in next 24 hours
 export const analyzeWeekday = onSchedule(
   {
-    schedule: "0 18 * * 1-5",
+    schedule: "0 12 * * 1-5",
     timeZone: "Asia/Seoul",
     timeoutSeconds: 540,
   },
@@ -308,12 +308,11 @@ export const analyzeWeekday = onSchedule(
   }
 );
 
-// Saturday 18:00 KST — analyze EPL matches in next 48 hours (covers Sat evening + all of Sun).
-// Runs after the 17:00 injury update so Saturday and Sunday games use fresh squad data.
+// Saturday 12:00 KST — analyze EPL matches in next 48 hours (covers Sat evening + all of Sun).
 // Sunday has no scheduled analysis run.
 export const analyzeSaturday = onSchedule(
   {
-    schedule: "0 18 * * 6",
+    schedule: "0 12 * * 6",
     timeZone: "Asia/Seoul",
     timeoutSeconds: 540,
   },
