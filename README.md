@@ -22,7 +22,7 @@ AI-powered EPL betting analysis — value picks updated daily.
 ### AI Analysis
 - Claude Sonnet analyses every upcoming EPL fixture (~12–36 h before kickoff)
 - Factors in recent form, head-to-head, rest days, rotation risk, and injuries
-- Outputs 1X2 + Over/Under 2.5 probabilities, EV %, edge %, and a confidence score
+- Outputs 1X2 + Over/Under probabilities (line per match, e.g. 2.5 or 3.5), EV %, edge %, and a confidence score
 
 ### Value Pick Engine
 - Filters picks by configurable thresholds (Edge ≥ 5%, Confidence ≥ 50)
@@ -30,7 +30,7 @@ AI-powered EPL betting analysis — value picks updated daily.
 
 ### Track Record Dashboard
 - Win rate, P&L (£10 flat stake), and ROI tracked automatically
-- Breakdown by pick type (Home Win, Draw, Away Win, Over/Under 2.5)
+- Breakdown by pick type (Home Win, Draw, Away Win, Over/Under)
 
 ### Injury & Suspension Tracking
 - Weekly manual upload via `updateInjuriesBulk` endpoint
@@ -38,8 +38,9 @@ AI-powered EPL betting analysis — value picks updated daily.
 
 ### Automated Pipeline
 - `collectFixtures` — daily fixture sync from football-data.org
-- `analyzeDaily` — scheduled pre-match analysis (Saturday 18:00 KST)
-- `collectResults` — post-match result collection + stats update (Sunday 09:00 KST)
+- `analyzeWeekday` — Mon–Fri 12:00 KST, covers next 24 h
+- `analyzeSaturday` — Sat 12:00 KST, covers next 48 h (Sat evening + all of Sun)
+- `collectResults` — daily 09:00 KST, post-match result collection + stats update
 
 ---
 
@@ -124,17 +125,17 @@ graph TD
 
     subgraph Firebase Functions
         CF[collectFixtures] -->|writes matches| FS
-        AD[analyzeDaily] -->|reads matches + injuries| FS
-        AD -->|writes analysis + picks| FS
+        AW[analyzeWeekday / analyzeSaturday] -->|reads matches + injuries| FS
+        AW -->|writes analysis + picks| FS
         CR[collectResults] -->|updates results + stats| FS
         UIB[updateInjuriesBulk] -->|writes injuries| FS
     end
 
-    AD -->|prompt| Claude["Claude Sonnet (Anthropic API)"]
-    Claude -->|JSON analysis| AD
+    AW -->|prompt| Claude["Claude Sonnet (Anthropic API)"]
+    Claude -->|JSON analysis| AW
 
     CF -->|fixtures| FD["football-data.org"]
-    AD -->|odds| OA["The Odds API"]
+    AW -->|odds| OA["The Odds API"]
 ```
 
 | Layer | Role |

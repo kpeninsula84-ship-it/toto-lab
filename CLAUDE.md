@@ -140,6 +140,9 @@ Single-page app (`index.html`):
 - Firestore `stats/summary` is the single document for all aggregate pick stats; `stats/visits` is the visitor counter (client-writable).
 - `recommendations/current` holds the active round's picks; overwritten each analysis run.
 - All monetary values stored in pence (integers) and displayed divided by 100.
+- O/U line is determined per match by selecting the most balanced (smallest over/under price gap) totals line from the bookmaker. Stored as `overUnder: { line, over, under }` in odds and `ouLine` on the match doc. Pick types are `over` / `under` (legacy docs may have `over25` / `under25`).
+- `analyzer.js` uses `buildSystemPrompt(ouLine)` to inject the actual line into the Claude prompt dynamically.
+- All Analysed Fixtures on the frontend shows upcoming matches (kickoff ≥ now, up to 4 days ahead) first in ascending order, followed by recently finished matches (kickoff within the last 24 h) in descending order.
 
 ## Known issues
 
