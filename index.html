@@ -17,7 +17,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, collection, getDoc, getDocs, doc, query, orderBy, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getFirestore, collection, getDoc, getDocs, doc, query, where, orderBy, Timestamp, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyASY-tE9WfcUzFoZ3vCy5lQOX0m5g61A5A",
@@ -153,7 +153,16 @@
       container.innerHTML = `<p class="text-gray-400 text-center py-12">Loading fixtures...</p>`;
 
       try {
-        const q = query(collection(db, "matches"), orderBy("kickoff", "asc"));
+        const now = Date.now();
+        const from = Timestamp.fromMillis(now - 24 * 60 * 60 * 1000);
+        const to = Timestamp.fromMillis(now + 4 * 24 * 60 * 60 * 1000);
+
+        const q = query(
+          collection(db, "matches"),
+          where("kickoff", ">=", from),
+          where("kickoff", "<=", to),
+          orderBy("kickoff", "asc")
+        );
         const snap = await getDocs(q);
 
         if (snap.empty) {
@@ -161,10 +170,29 @@
           return;
         }
 
-        container.innerHTML = "";
+        const nowTs = Timestamp.fromMillis(now);
+        const upcoming = [];
+        const finished = [];
         snap.forEach((doc) => {
-          container.appendChild(renderMatchCard(doc.data()));
+          const m = doc.data();
+          if (m.kickoff.toMillis() >= now) {
+            upcoming.push(m);
+          } else {
+            finished.push(m);
+          }
         });
+
+        // finished: most recently kicked off first
+        finished.sort((a, b) => b.kickoff.toMillis() - a.kickoff.toMillis());
+
+        container.innerHTML = "";
+        for (const m of [...upcoming, ...finished]) {
+          container.appendChild(renderMatchCard(m));
+        }
+
+        if (upcoming.length === 0 && finished.length === 0) {
+          container.innerHTML = `<p class="text-gray-400 text-center py-12">No fixtures analysed yet. Check back soon.</p>`;
+        }
       } catch (err) {
         container.innerHTML = `<p class="text-red-400 text-center py-12">Failed to load: ${err.message}</p>`;
       }
