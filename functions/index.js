@@ -24,13 +24,17 @@ const EDGE_THRESHOLD = 5;
 const CONFIDENCE_THRESHOLD = 50;
 const MAX_PICKS = 3;
 
-const PICK_LABEL = {
+const PICK_LABEL_STATIC = {
   home: "홈 승",
   draw: "무승부",
   away: "원정 승",
-  over25: "2.5 오버",
-  under25: "2.5 언더",
 };
+
+function pickLabel(pick, ouLine) {
+  if (pick === "over") return `${ouLine} 오버`;
+  if (pick === "under") return `${ouLine} 언더`;
+  return PICK_LABEL_STATIC[pick] || pick;
+}
 
 function getOddsForPick(match) {
   const { pick, odds } = match;
@@ -38,8 +42,8 @@ function getOddsForPick(match) {
   if (pick === "home") return odds.matchWinner?.home ?? null;
   if (pick === "draw") return odds.matchWinner?.draw ?? null;
   if (pick === "away") return odds.matchWinner?.away ?? null;
-  if (pick === "over25") return odds.overUnder25?.over ?? null;
-  if (pick === "under25") return odds.overUnder25?.under ?? null;
+  if (pick === "over") return odds.overUnder?.over ?? null;
+  if (pick === "under") return odds.overUnder?.under ?? null;
   return null;
 }
 
@@ -49,19 +53,22 @@ function getProbForPick(match) {
   if (pick === "home") return match.probs?.home ?? null;
   if (pick === "draw") return match.probs?.draw ?? null;
   if (pick === "away") return match.probs?.away ?? null;
-  if (pick === "over25") return match.overUnder25?.over ?? null;
-  if (pick === "under25") return match.overUnder25?.under ?? null;
+  if (pick === "over") return match.overUnder?.over ?? null;
+  if (pick === "under") return match.overUnder?.under ?? null;
   return null;
 }
 
 const FLAT_STAKE = 1000; // for ROI calc
 
-function didPickWin(pick, score) {
+function didPickWin(pick, score, ouLine) {
   if (!pick || score?.home == null || score?.away == null) return null;
   const total = score.home + score.away;
   if (pick === "home") return score.home > score.away;
   if (pick === "draw") return score.home === score.away;
   if (pick === "away") return score.away > score.home;
+  if (pick === "over") return total > (ouLine ?? 2.5);
+  if (pick === "under") return total < (ouLine ?? 2.5);
+  // fallback for legacy picks stored as over25/under25
   if (pick === "over25") return total > 2.5;
   if (pick === "under25") return total < 2.5;
   return null;
@@ -156,7 +163,7 @@ async function computeAndSaveRecommendations() {
       away: m.away,
       kickoff: m.kickoff,
       pick: m.pick,
-      pickLabel: PICK_LABEL[m.pick] || m.pick,
+      pickLabel: pickLabel(m.pick, m.ouLine ?? 2.5),
       odds: pickOdds,
       prob: pickProb,
       edge: m.edge,
@@ -346,7 +353,7 @@ export const collectResults = onSchedule(
       const m = snap.data();
       if (m.result) continue; // already recorded
 
-      const won = didPickWin(m.pick, f.score);
+      const won = didPickWin(m.pick, f.score, m.ouLine);
       await ref.update({
         finalScore: f.score,
         actualWinner: f.winner,
@@ -487,7 +494,7 @@ export const collectResultsManual = onRequest(
         if (!snap.exists) continue;
         const m = snap.data();
         if (m.result) continue;
-        const won = didPickWin(m.pick, f.score);
+        const won = didPickWin(m.pick, f.score, m.ouLine);
         await ref.update({
           finalScore: f.score,
           actualWinner: f.winner,

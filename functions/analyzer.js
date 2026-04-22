@@ -2,7 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
 
-const SYSTEM_PROMPT = `You are a soccer betting analyst for the English Premier League.
+function buildSystemPrompt(ouLine) {
+  return `You are a soccer betting analyst for the English Premier League.
 
 ⚠️ TIMING: This analysis runs ~12-36 hours before kickoff. Official STARTING LINEUPS are NOT yet available (announced 1h before match). DO NOT attempt to predict who starts.
 
@@ -41,7 +42,7 @@ Only flag players important enough to move probabilities (top scorers, key defen
    - Only apply probability penalty if backup quality is meaningfully lower than the starter
 
 === OUTPUT RULES ===
-- 1X2 probabilities sum to 100. Over/Under 2.5 probabilities sum to 100.
+- 1X2 probabilities sum to 100. Over/Under ${ouLine} probabilities sum to 100.
 - Recommend pick ONLY if Edge > 5.
 - Confidence 0-100 (<40 = 'none', 60+ = strong signal).
 - If fan_team is true, STRICTLY data-driven.
@@ -49,6 +50,7 @@ Only flag players important enough to move probabilities (top scorers, key defen
 Reasoning array: 3-6 bullets. Include player status bucket if relevant (e.g., "Arsenal: Saka OUT (hamstring), Odegaard DOUBTFUL (knee)").
 
 Output STRICT JSON per schema. No markdown.`;
+}
 
 const OUTPUT_SCHEMA = {
   type: "object",
@@ -63,7 +65,7 @@ const OUTPUT_SCHEMA = {
       required: ["home", "draw", "away"],
       additionalProperties: false,
     },
-    overUnder25: {
+    overUnder: {
       type: "object",
       properties: {
         over: { type: "integer" },
@@ -74,7 +76,7 @@ const OUTPUT_SCHEMA = {
     },
     pick: {
       type: "string",
-      enum: ["home", "draw", "away", "over25", "under25", "none"],
+      enum: ["home", "draw", "away", "over", "under", "none"],
     },
     edge: { type: "integer" },
     confidence: { type: "integer" },
@@ -83,16 +85,17 @@ const OUTPUT_SCHEMA = {
       items: { type: "string" },
     },
   },
-  required: ["probs", "overUnder25", "pick", "edge", "confidence", "reasoning"],
+  required: ["probs", "overUnder", "pick", "edge", "confidence", "reasoning"],
   additionalProperties: false,
 };
 
 export async function analyzeMatch(data) {
+  const ouLine = data.odds?.overUnder?.line ?? 2.5;
   const userContent = buildUserPrompt(data);
   const params = {
     model: "claude-sonnet-4-6",
     max_tokens: 1024,
-    system: SYSTEM_PROMPT,
+    system: buildSystemPrompt(ouLine),
     messages: [{ role: "user", content: userContent }],
     output_config: {
       format: { type: "json_schema", schema: OUTPUT_SCHEMA },
@@ -112,7 +115,8 @@ export async function analyzeMatch(data) {
 
   return {
     probs: prediction.probs,
-    overUnder25: prediction.overUnder25,
+    overUnder: prediction.overUnder,
+    ouLine,
     pick: prediction.pick === "none" ? null : prediction.pick,
     edge: prediction.edge,
     confidence: prediction.confidence,

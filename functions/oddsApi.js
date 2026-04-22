@@ -53,14 +53,21 @@ export function findOddsForMatch(oddsEvents, homeTeamName, awayTeamName) {
 
   const totals = bookmaker.markets.find((m) => m.key === "totals");
   if (totals) {
-    const over = totals.outcomes.find(
-      (o) => o.name === "Over" && o.point === 2.5
-    );
-    const under = totals.outcomes.find(
-      (o) => o.name === "Under" && o.point === 2.5
-    );
-    if (over && under) {
-      result.overUnder25 = { over: over.price, under: under.price };
+    const lineMap = {};
+    for (const o of totals.outcomes) {
+      lineMap[o.point] = lineMap[o.point] || {};
+      lineMap[o.point][o.name] = o.price;
+    }
+    let best = null;
+    for (const [point, sides] of Object.entries(lineMap)) {
+      if (!sides.Over || !sides.Under) continue;
+      const diff = Math.abs(sides.Over - sides.Under);
+      if (!best || diff < best.diff) {
+        best = { line: parseFloat(point), over: sides.Over, under: sides.Under, diff };
+      }
+    }
+    if (best) {
+      result.overUnder = { line: best.line, over: best.over, under: best.under };
     }
   }
 
