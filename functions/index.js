@@ -243,63 +243,82 @@ export const collectFixtures = onSchedule(
   }
 );
 
-// Daily 18:00 KST — analyze EPL matches in next 36 hours (covers weekend + midweek)
-export const analyzeDaily = onSchedule(
+// Shared analysis runner: fetches matches within [now, now+horizonHours], analyzes, saves recommendations.
+async function runScheduledAnalysis(horizonHours, label) {
+  const now = Date.now();
+  const horizon = Timestamp.fromMillis(now + horizonHours * 60 * 60 * 1000);
+
+  const snap = await db
+    .collection("matches")
+    .where("kickoff", ">=", Timestamp.fromMillis(now))
+    .where("kickoff", "<=", horizon)
+    .get();
+
+  const upcoming = snap.docs.filter((d) => {
+    const data = d.data();
+    const s = data.status;
+    return (s === "SCHEDULED" || s === "TIMED") && !data.analyzed;
+  });
+
+  if (!upcoming.length) {
+    console.log(`[${label}] No unanalyzed EPL matches in next ${horizonHours}h`);
+    return;
+  }
+
+  console.log(`[${label}] analyzing ${upcoming.length} matches (${horizonHours}h window)`);
+
+  const [standings, oddsEvents] = await Promise.all([
+    getStandings(),
+    getEPLOdds(),
+  ]);
+
+  for (const doc of upcoming) {
+    const m = doc.data();
+    if (m.analyzed) continue;
+
+    try {
+      console.log(`[${label}] Analyzing ${m.home} vs ${m.away}`);
+      const result = await runFullAnalysis(m, standings, oddsEvents);
+      await doc.ref.update({
+        ...result,
+        analyzed: true,
+        analyzedAt: Timestamp.now(),
+      });
+    } catch (err) {
+      console.error(`[${label}] Failed: ${m.home} vs ${m.away} —`, err.message);
+      await doc.ref.update({
+        analysisError: err.message,
+        analysisErrorAt: Timestamp.now(),
+      });
+    }
+  }
+
+  await computeAndSaveRecommendations();
+}
+
+// Mon–Fri 18:00 KST — analyze EPL matches in next 24 hours
+export const analyzeWeekday = onSchedule(
   {
-    schedule: "0 18 * * *",
+    schedule: "0 18 * * 1-5",
     timeZone: "Asia/Seoul",
     timeoutSeconds: 540,
   },
   async () => {
-    const now = Date.now();
-    const horizon = Timestamp.fromMillis(now + 36 * 60 * 60 * 1000);
+    await runScheduledAnalysis(24, "weekday");
+  }
+);
 
-    const snap = await db
-      .collection("matches")
-      .where("kickoff", ">=", Timestamp.fromMillis(now))
-      .where("kickoff", "<=", horizon)
-      .get();
-
-    const upcoming = snap.docs.filter((d) => {
-      const data = d.data();
-      const s = data.status;
-      return (s === "SCHEDULED" || s === "TIMED") && !data.analyzed;
-    });
-
-    if (!upcoming.length) {
-      console.log("No unanalyzed EPL matches in next 36h");
-      return;
-    }
-
-    console.log(`[daily] analyzing ${upcoming.length} matches`);
-
-    const [standings, oddsEvents] = await Promise.all([
-      getStandings(),
-      getEPLOdds(),
-    ]);
-
-    for (const doc of upcoming) {
-      const m = doc.data();
-      if (m.analyzed) continue;
-
-      try {
-        console.log(`Analyzing ${m.home} vs ${m.away}`);
-        const result = await runFullAnalysis(m, standings, oddsEvents);
-        await doc.ref.update({
-          ...result,
-          analyzed: true,
-          analyzedAt: Timestamp.now(),
-        });
-      } catch (err) {
-        console.error(`Failed: ${m.home} vs ${m.away} —`, err.message);
-        await doc.ref.update({
-          analysisError: err.message,
-          analysisErrorAt: Timestamp.now(),
-        });
-      }
-    }
-
-    await computeAndSaveRecommendations();
+// Saturday 18:00 KST — analyze EPL matches in next 48 hours (covers Sat evening + all of Sun).
+// Runs after the 17:00 injury update so Saturday and Sunday games use fresh squad data.
+// Sunday has no scheduled analysis run.
+export const analyzeSaturday = onSchedule(
+  {
+    schedule: "0 18 * * 6",
+    timeZone: "Asia/Seoul",
+    timeoutSeconds: 540,
+  },
+  async () => {
+    await runScheduledAnalysis(48, "saturday");
   }
 );
 
