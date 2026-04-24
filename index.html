@@ -182,7 +182,8 @@
           }
         });
 
-        // finished: most recently kicked off first
+        // upcoming: soonest first, finished: most recently kicked off first
+        upcoming.sort((a, b) => a.kickoff.toMillis() - b.kickoff.toMillis());
         finished.sort((a, b) => b.kickoff.toMillis() - a.kickoff.toMillis());
 
         container.innerHTML = "";
