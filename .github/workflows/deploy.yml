@@ -36,3 +36,20 @@ jobs:
           args: deploy --only functions,hosting,firestore --project toto-lab --force
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
+      - name: Upload injuries to Firestore (if changed)
+        run: |
+          if [ -f "injuries-payload.json" ]; then
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- injuries-payload.json 2>/dev/null || true)
+            if [ -n "$CHANGED" ]; then
+              echo "injuries-payload.json changed — uploading to Firestore..."
+              curl -f -X POST \
+                -H "Content-Type: application/json" \
+                --data "@injuries-payload.json" \
+                https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk
+            else
+              echo "injuries-payload.json not changed — skipping upload."
+            fi
+          else
+            echo "injuries-payload.json not found — skipping upload."
+          fi
