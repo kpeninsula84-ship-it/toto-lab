@@ -22,6 +22,7 @@ const ARSENAL_TEAM_ID = 57; // football-data.org team id
 
 const EDGE_THRESHOLD = 5;
 const CONFIDENCE_THRESHOLD = 50;
+const SECONDARY_CONFIDENCE_MIN = 40;
 const MAX_PICKS = 3;
 
 const PICK_LABEL_STATIC = {
@@ -135,7 +136,8 @@ async function computeAndSaveRecommendations() {
     .where("kickoff", ">=", now)
     .get();
 
-  const candidates = [];
+  const strongCandidates = [];
+  const secondaryCandidates = [];
   let totalAnalyzed = 0;
 
   for (const doc of snap.docs) {
@@ -145,19 +147,17 @@ async function computeAndSaveRecommendations() {
 
     if (!m.pick) continue;
     if ((m.edge ?? 0) < EDGE_THRESHOLD) continue;
-    if ((m.confidence ?? 0) < CONFIDENCE_THRESHOLD) continue;
 
+    const conf = m.confidence ?? 0;
     const pickOdds = getOddsForPick(m);
     if (!pickOdds) continue;
 
     const pickProb = getProbForPick(m);
     if (pickProb == null) continue;
 
-    // EV = expected return per unit stake, e.g. 0.26 means +26% expected profit.
-    // Captures both probability and odds magnitude, unlike raw edge.
     const ev = (pickProb / 100) * pickOdds - 1;
 
-    candidates.push({
+    const entry = {
       fixtureId: m.fixtureId,
       home: m.home,
       away: m.away,
@@ -168,22 +168,32 @@ async function computeAndSaveRecommendations() {
       prob: pickProb,
       edge: m.edge,
       ev: Math.round(ev * 1000) / 10,
-      confidence: m.confidence,
-      score: Math.round(ev * m.confidence),
-    });
+      confidence: conf,
+      score: Math.round(ev * conf),
+    };
+
+    if (conf >= CONFIDENCE_THRESHOLD) {
+      strongCandidates.push(entry);
+    } else if (conf >= SECONDARY_CONFIDENCE_MIN) {
+      secondaryCandidates.push(entry);
+    }
   }
 
-  candidates.sort((a, b) => b.score - a.score);
-  const picks = candidates.slice(0, MAX_PICKS);
+  strongCandidates.sort((a, b) => b.score - a.score);
+  secondaryCandidates.sort((a, b) => b.score - a.score);
+
+  const picks = strongCandidates.slice(0, MAX_PICKS);
+  const secondaryPicks = secondaryCandidates.slice(0, MAX_PICKS);
 
   const comboOdds = picks.reduce((acc, p) => acc * p.odds, 1);
 
   const payload = {
     updatedAt: Timestamp.now(),
     totalAnalyzed,
-    totalPassed: candidates.length,
+    totalPassed: strongCandidates.length,
     pickCount: picks.length,
     picks,
+    secondaryPicks,
     comboOdds: picks.length >= 2 ? Number(comboOdds.toFixed(2)) : null,
     threshold: { edge: EDGE_THRESHOLD, confidence: CONFIDENCE_THRESHOLD },
   };
