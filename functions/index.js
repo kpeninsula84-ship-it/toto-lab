@@ -528,9 +528,11 @@ export const reanalyzeUpcomingManual = onRequest(
         .where("kickoff", "<=", horizon)
         .get();
 
+      const force = req.query.force === "true";
       const upcoming = snap.docs.filter((d) => {
-        const s = d.data().status;
-        return s === "SCHEDULED" || s === "TIMED";
+        const data = d.data();
+        const s = data.status;
+        return (s === "SCHEDULED" || s === "TIMED") && (force || !data.analyzed);
       });
 
       if (!upcoming.length) {
