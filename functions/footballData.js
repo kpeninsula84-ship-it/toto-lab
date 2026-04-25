@@ -1,15 +1,28 @@
 const BASE_URL = "https://api.football-data.org/v4";
 const PL_CODE = "PL";
 
-async function apiCall(endpoint) {
+async function apiCall(endpoint, retries = 3) {
   const res = await fetch(`${BASE_URL}${endpoint}`, {
     headers: { "X-Auth-Token": process.env.FOOTBALL_DATA_TOKEN },
   });
 
+  if (res.status === 429) {
+    if (retries <= 0) throw new Error(`football-data.org 429: rate limit exceeded`);
+    let wait = 35;
+    try {
+      const body = await res.json();
+      const match = String(body.message || "").match(/Wait (\d+)/);
+      if (match) wait = parseInt(match[1], 10) + 3;
+    } catch {}
+    console.log(`[football-data] 429 — waiting ${wait}s then retrying`);
+    await new Promise((r) => setTimeout(r, wait * 1000));
+    return apiCall(endpoint, retries - 1);
+  }
+
   const remaining = res.headers.get("X-Requests-Available-Minute");
   if (remaining && parseInt(remaining, 10) <= 1) {
-    console.log("[football-data] rate limit near, sleeping 10s");
-    await new Promise((r) => setTimeout(r, 10_000));
+    console.log("[football-data] rate limit near, sleeping 35s");
+    await new Promise((r) => setTimeout(r, 35_000));
   }
 
   if (!res.ok) {
