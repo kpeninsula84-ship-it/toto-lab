@@ -31,15 +31,19 @@
 
 ## 주간 부상 데이터 업데이트
 
-### 1. Claude Code 세션에서 부상 검색 요청
+### 1. premierinjuries.com에서 PDF 다운로드
 
-Claude에게 이렇게 요청한다:
+11:00 이전에 [premierinjuries.com/injury-table.php](https://www.premierinjuries.com/injury-table.php) 접속 → 페이지를 PDF로 저장.
 
-> "EPL 20팀 부상/출전정지 정보 업데이트해줘. OPERATIONS.md 매뉴얼 따라."
+### 2. Claude Code 세션에 PDF 첨부
 
-Claude가 20팀 웹 검색 → `injuries-payload.json` 파일 생성 → `main` 브랜치에 커밋/푸시.
+Claude Code 세션에 PDF를 첨부하며 요청한다:
 
-### 2. 푸시 후 자동 업로드 확인
+> "부상 및 출전정지 상태 업데이트 하자"
+
+Claude가 PDF에서 20팀 데이터 추출 → `injuries-payload.json` 생성 → `main` 브랜치에 커밋/푸시.
+
+### 3. 푸시 후 자동 업로드 확인
 
 `injuries-payload.json`이 변경되어 main에 푸시되면 CI/CD가 자동으로 Firestore에 업로드한다.
 **별도 curl 명령 불필요.**
