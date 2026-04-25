@@ -39,31 +39,21 @@ Claude에게 이렇게 요청한다:
 
 Claude가 20팀 웹 검색 → `injuries-payload.json` 파일 생성 → `main` 브랜치에 커밋/푸시.
 
-### 2. 로컬에 최신 코드 가져오기
+### 2. 푸시 후 자동 업로드 확인
 
-```powershell
-git pull origin main
-```
+`injuries-payload.json`이 변경되어 main에 푸시되면 CI/CD가 자동으로 Firestore에 업로드한다.
+**별도 curl 명령 불필요.**
 
-### 3. Firestore에 업로드
+GitHub → Actions 탭에서 최신 워크플로우 실행 결과 확인:
+- `Upload injuries to Firestore` step이 성공이면 완료
+- 로그에 `"ok":true,"updated":20` 확인
 
-```powershell
-curl.exe -X POST -H "Content-Type: application/json" --data "@injuries-payload.json" https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk
-```
-
-**기대 응답**:
-```json
-{"ok":true,"updated":20,"results":[...]}
-```
-
-모든 팀이 `updated` 카운트에 포함되어야 한다. 20 미만이면 팀 이름 매칭 실패 가능 (football-data.org 공식 이름과 다름).
-
-### 4. 확인
+### 3. 확인 (선택)
 
 - Firebase 콘솔 → Firestore → `injuries` 컬렉션에 20개 문서 있는지 확인
 - `updatedAt` 타임스탬프가 방금 시간인지 확인
 
-### 5. 자동 분석 대기
+### 4. 자동 분석 대기
 
 12:00 KST에 `analyzeWeekday` 또는 `analyzeSaturday` 자동 실행 → 사이트에 값 픽 갱신됨.
 
@@ -95,6 +85,14 @@ $100 한도 → **12~20개월** 지속 가능.
 ---
 
 ## 트러블슈팅
+
+### CI/CD injuries 업로드 실패
+- GitHub Actions → 해당 워크플로우 → `Upload injuries to Firestore` step 로그 확인
+- `updated: N` 이 20보다 적으면 팀 이름 매칭 실패 → Firestore `injuries` 컬렉션에서 `teamName` 확인
+- 수동으로 업로드하려면:
+  ```powershell
+  curl.exe -X POST -H "Content-Type: application/json" --data "@injuries-payload.json" https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk
+  ```
 
 ### `updateInjuriesBulk` 401/403 에러
 - football-data.org 토큰 만료 → Anthropic 콘솔에서 재발급 후 GitHub Secrets 업데이트 → 빈 커밋으로 재배포
