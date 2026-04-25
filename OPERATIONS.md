@@ -1,17 +1,31 @@
 # TotoLab 주간 운영 매뉴얼
 
-매주 토요일(경기 전)에 부상 데이터를 수동 업데이트한다.
+매 경기일 전날, 분석 실행(12:00 KST) 전에 부상 데이터를 수동 업데이트한다.
 
 ---
 
-## 타임라인
+## 자동 실행 스케줄
 
 ```
-토요일 16:00~17:00 KST   부상 데이터 수동 업데이트 (이 매뉴얼)
-토요일 18:00 KST         자동: analyzeDaily 실행 (부상 데이터 반영)
-토요일 저녁 이후         사이트에 값 픽 표시
-일요일 09:00 KST         자동: collectResults 실행 (결과 수집 + 통계 갱신)
+매일 06:00 KST       자동: collectFixtures (다음 7일 경기 수집)
+월~금 12:00 KST      자동: analyzeWeekday (다음 24시간 경기 분석)
+토요일 12:00 KST     자동: analyzeSaturday (다음 48시간 경기 분석 — 토요일 저녁 + 일요일 전체)
+매일 09:00 KST       자동: collectResults (종료 경기 결과 수집 + 통계 갱신)
 ```
+
+---
+
+## 타임라인 (경기 있는 날 기준)
+
+```
+전날 또는 당일 11:00 이전   부상 데이터 수동 업데이트 (이 매뉴얼)
+당일 12:00 KST              자동: analyzeWeekday 또는 analyzeSaturday (부상 데이터 반영)
+당일 오후 이후              사이트에 값 픽 표시
+다음날 09:00 KST            자동: collectResults (결과 수집 + 통계 갱신)
+```
+
+⚠️ 11:00 이후에 부상 데이터를 올리면 당일 자동 분석에 반영되지 않는다.
+그 경우 수동 재분석(`reanalyzeUpcomingManual`)을 따로 실행해야 한다.
 
 ---
 
@@ -51,13 +65,13 @@ curl.exe -X POST -H "Content-Type: application/json" --data "@injuries-payload.j
 
 ### 5. 자동 분석 대기
 
-18:00 KST에 `analyzeDaily` 자동 실행 → 사이트에 값 픽 갱신됨.
+12:00 KST에 `analyzeWeekday` 또는 `analyzeSaturday` 자동 실행 → 사이트에 값 픽 갱신됨.
 
 ---
 
 ## 수동 재분석 (선택)
 
-부상 데이터 업데이트 후 즉시 재분석하고 싶을 때:
+부상 데이터를 12:00 이후에 올렸거나 즉시 재분석하고 싶을 때:
 
 ```powershell
 curl.exe https://asia-northeast3-toto-lab.cloudfunctions.net/reanalyzeUpcomingManual
@@ -72,7 +86,7 @@ curl.exe https://asia-northeast3-toto-lab.cloudfunctions.net/reanalyzeUpcomingMa
 
 | 항목 | 빈도 | 회당 | 월간 |
 |---|---|---|---|
-| analyzeDaily | 경기 있는 날 | $0.10/경기 | ~$3~5 |
+| analyzeWeekday / analyzeSaturday | 경기 있는 날 | $0.10/경기 | ~$3~5 |
 | 부상 업데이트 (수동) | 주 1회 | $0 (chat 웹검색 무료) | $0 |
 | 총 | | | **~$5~8** |
 
@@ -89,8 +103,8 @@ $100 한도 → **12~20개월** 지속 가능.
 - 팀 이름 매칭 실패. Firestore `injuries` 컬렉션에서 `teamName` 필드 확인.
 - football-data.org 공식 이름 예: "Arsenal FC", "Manchester United FC", "AFC Bournemouth" (앞에 붙는 경우도 있음)
 
-### 18:00 분석이 안 돌아감
-- Firebase 콘솔 → Functions → `analyzeDaily` 로그 확인
+### 12:00 분석이 안 돌아감
+- Firebase 콘솔 → Functions → `analyzeWeekday` 또는 `analyzeSaturday` 로그 확인
 - 스케줄러 상태: Cloud Scheduler 콘솔
 
 ### 배포 실패 (CI)
