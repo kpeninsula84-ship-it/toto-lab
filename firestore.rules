@@ -25,9 +25,45 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
-    // 방문자 카운터만 클라이언트 쓰기 허용
+    // 방문자 카운터: 클라이언트는 읽기 + total/daily.{today} +1 증가만 허용
     match /stats/visits {
-      allow read, write: if true;
+      allow read: if true;
+
+      // Initial create: must start at total=1 with a single daily entry of value 1.
+      allow create: if request.resource.data.total == 1
+        && request.resource.data.daily.size() == 1
+        && request.resource.data.daily.values()[0] == 1;
+
+      // Update: only total + daily allowed; total must increment by exactly 1;
+      // daily map may only grow, and exactly one daily key must change by +1
+      // (either a new key set to 1, or an existing key incremented).
+      allow update: if request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['total', 'daily'])
+        && request.resource.data.total is int
+        && request.resource.data.total == resource.data.total + 1
+        && request.resource.data.daily.diff(resource.data.daily)
+            .removedKeys().size() == 0
+        && request.resource.data.daily.diff(resource.data.daily)
+            .affectedKeys().size() == 1
+        && (
+          // case A: new daily key — its value must be exactly 1
+          (request.resource.data.daily.diff(resource.data.daily)
+                .addedKeys().size() == 1
+            && request.resource.data.daily[
+                  request.resource.data.daily.diff(resource.data.daily)
+                    .addedKeys().toList()[0]
+               ] == 1)
+          // case B: existing daily key incremented by exactly 1
+          || (request.resource.data.daily.diff(resource.data.daily)
+                .changedKeys().size() == 1
+            && request.resource.data.daily[
+                  request.resource.data.daily.diff(resource.data.daily)
+                    .changedKeys().toList()[0]
+               ] == resource.data.daily[
+                  request.resource.data.daily.diff(resource.data.daily)
+                    .changedKeys().toList()[0]
+               ] + 1)
+        );
     }
   }
 }

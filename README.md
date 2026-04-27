@@ -86,12 +86,18 @@ firebase deploy
 
 ### Manual operations
 
+All manual HTTP triggers require an `x-admin-token` header matching the `ADMIN_TOKEN`
+env var set on the deployed functions.
+
 ```bash
 # Force re-analysis of upcoming fixtures (within 36 h)
-curl https://asia-northeast3-toto-lab.cloudfunctions.net/reanalyzeUpcomingManual
+curl -H "x-admin-token: $ADMIN_TOKEN" \
+  https://asia-northeast3-toto-lab.cloudfunctions.net/reanalyzeUpcomingManual
 
 # Upload injury data
-curl -X POST -H "Content-Type: application/json" \
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
   --data "@injuries-payload.json" \
   https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk
 ```

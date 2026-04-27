@@ -25,6 +25,20 @@ const CONFIDENCE_THRESHOLD = 50;
 const SECONDARY_CONFIDENCE_MIN = 40;
 const MAX_PICKS = 3;
 
+function requireAdmin(req, res) {
+  const expected = process.env.ADMIN_TOKEN;
+  if (!expected) {
+    res.status(503).json({ error: "ADMIN_TOKEN not configured on server" });
+    return false;
+  }
+  const provided = req.get("x-admin-token");
+  if (provided !== expected) {
+    res.status(401).json({ error: "unauthorized" });
+    return false;
+  }
+  return true;
+}
+
 const PICK_LABEL_STATIC = {
   home: "홈 승",
   draw: "무승부",
@@ -200,7 +214,7 @@ async function computeAndSaveRecommendations() {
 
   await db.collection("recommendations").doc("current").set(payload);
   console.log(
-    `[recommendations] analyzed=${totalAnalyzed} passed=${candidates.length} picks=${picks.length}`
+    `[recommendations] analyzed=${totalAnalyzed} passed=${strongCandidates.length} picks=${picks.length} secondary=${secondaryPicks.length}`
   );
   return payload;
 }
@@ -411,6 +425,7 @@ export const collectResults = onSchedule(
 export const collectInjuriesManual = onRequest(
   { invoker: "public", timeoutSeconds: 540 },
   async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const standings = await getStandings();
       const teams = new Map(standings.map((s) => [s.teamId, s.team]));
@@ -452,6 +467,7 @@ export const updateInjuriesBulk = onRequest(
       res.status(405).json({ error: "POST required" });
       return;
     }
+    if (!requireAdmin(req, res)) return;
     try {
       const payload = req.body || {};
       const standings = await getStandings();
@@ -490,6 +506,7 @@ export const updateInjuriesBulk = onRequest(
 export const collectResultsManual = onRequest(
   { invoker: "public", timeoutSeconds: 120 },
   async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const now = new Date();
       const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
@@ -528,6 +545,7 @@ export const collectResultsManual = onRequest(
 export const reanalyzeUpcomingManual = onRequest(
   { invoker: "public", timeoutSeconds: 540 },
   async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const now = Date.now();
       const horizon = Timestamp.fromMillis(now + 36 * 60 * 60 * 1000);
@@ -585,6 +603,7 @@ export const reanalyzeUpcomingManual = onRequest(
 export const analyzeManual = onRequest(
   { timeoutSeconds: 540, invoker: "public" },
   async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     const fixtureId = req.query.fixtureId;
     if (!fixtureId) {
       res.status(400).json({ error: "fixtureId query param required" });
