@@ -13,6 +13,7 @@ import {
 } from "./footballData.js";
 import { getEPLOdds, findOddsForMatch } from "./oddsApi.js";
 import { analyzeMatch, fetchTeamInjuries } from "./analyzer.js";
+import { devigMatchWinner, devigTwoWay } from "./devig.js";
 
 initializeApp();
 setGlobalOptions({ region: "asia-northeast3", maxInstances: 5 });
@@ -51,6 +52,8 @@ function pickLabel(pick, ouLine) {
   return PICK_LABEL_STATIC[pick] || pick;
 }
 
+// Market book (bet365 or fallback) — used for execution price (EV).
+// Reads the legacy flat shape so existing finished-match docs keep working.
 function getOddsForPick(match) {
   const { pick, odds } = match;
   if (!pick || !odds) return null;
@@ -62,6 +65,7 @@ function getOddsForPick(match) {
   return null;
 }
 
+// Model probability for the chosen pick (Claude output, 0-100 integers).
 function getProbForPick(match) {
   const { pick } = match;
   if (!pick) return null;
@@ -71,6 +75,37 @@ function getProbForPick(match) {
   if (pick === "over") return match.overUnder?.over ?? null;
   if (pick === "under") return match.overUnder?.under ?? null;
   return null;
+}
+
+// Fair (de-vigged) probability for the chosen pick (0-1 fractions).
+// Returns null when the de-vig couldn't be computed for this market.
+function getFairProbForPick(match) {
+  const { pick, fairProbs } = match;
+  if (!pick || !fairProbs) return null;
+  if (pick === "home") return fairProbs.matchWinner?.home ?? null;
+  if (pick === "draw") return fairProbs.matchWinner?.draw ?? null;
+  if (pick === "away") return fairProbs.matchWinner?.away ?? null;
+  if (pick === "over") return fairProbs.overUnder?.over ?? null;
+  if (pick === "under") return fairProbs.overUnder?.under ?? null;
+  return null;
+}
+
+// Build the fairProbs block used by getFairProbForPick. Prefers the sharp
+// book snapshot (Pinnacle/Smarkets/Betfair) when available; otherwise falls
+// back to the market book itself, which still benefits from de-vig (just
+// against a softer reference). Returns null if no usable odds exist.
+function computeFairProbs(odds) {
+  if (!odds) return null;
+  const sharpMW = odds.fair?.matchWinner ?? odds.market?.matchWinner ?? odds.matchWinner ?? null;
+  const sharpTotals = odds.fair?.totals?.best ?? odds.market?.totals?.best ?? odds.overUnder ?? null;
+  const out = {};
+  const mw = sharpMW ? devigMatchWinner(sharpMW) : null;
+  if (mw) out.matchWinner = mw;
+  if (sharpTotals?.over && sharpTotals?.under) {
+    const tw = devigTwoWay(sharpTotals.over, sharpTotals.under);
+    if (tw) out.overUnder = { line: sharpTotals.line, over: tw[0], under: tw[1] };
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 const FLAT_STAKE = 1000; // for ROI calc
@@ -153,6 +188,8 @@ async function computeAndSaveRecommendations() {
   const strongCandidates = [];
   const secondaryCandidates = [];
   let totalAnalyzed = 0;
+  let droppedNoFair = 0;
+  let droppedLowEdge = 0;
 
   for (const doc of snap.docs) {
     const m = doc.data();
@@ -160,7 +197,6 @@ async function computeAndSaveRecommendations() {
     totalAnalyzed++;
 
     if (!m.pick) continue;
-    if ((m.edge ?? 0) < EDGE_THRESHOLD) continue;
 
     const conf = m.confidence ?? 0;
     const pickOdds = getOddsForPick(m);
@@ -169,7 +205,23 @@ async function computeAndSaveRecommendations() {
     const pickProb = getProbForPick(m);
     if (pickProb == null) continue;
 
-    const ev = (pickProb / 100) * pickOdds - 1;
+    // Edge is now computed against the de-vigged sharp book ("fair price"),
+    // not the raw market odds Claude saw. This removes the bookmaker's
+    // overround from the comparison so a 5%pp edge actually means 5%pp.
+    const fairProb = getFairProbForPick(m);
+    if (fairProb == null) {
+      droppedNoFair++;
+      continue;
+    }
+    const modelProbFraction = pickProb / 100;
+    const edgeFair = (modelProbFraction - fairProb) * 100; // percentage points
+    if (edgeFair < EDGE_THRESHOLD) {
+      droppedLowEdge++;
+      continue;
+    }
+
+    // EV is the actual betting expectation — use the market (bet365) price.
+    const ev = modelProbFraction * pickOdds - 1;
 
     const entry = {
       fixtureId: m.fixtureId,
@@ -180,10 +232,14 @@ async function computeAndSaveRecommendations() {
       pickLabel: pickLabel(m.pick, m.ouLine ?? 2.5),
       odds: pickOdds,
       prob: pickProb,
-      edge: m.edge,
+      fairProb: Math.round(fairProb * 1000) / 10, // store as %, 1 decimal
+      edge: Math.round(edgeFair * 10) / 10,
+      edgeRaw: m.edge ?? null, // keep Claude's self-reported edge for reference
       ev: Math.round(ev * 1000) / 10,
       confidence: conf,
-      score: Math.round(ev * conf),
+      // sqrt(conf) softens the confidence weighting so a strong-EV pick at
+      // conf 50 isn't buried behind a weak-EV pick at conf 80.
+      score: Math.round(ev * Math.sqrt(conf / 100) * 100) / 100,
     };
 
     if (conf >= CONFIDENCE_THRESHOLD) {
@@ -209,12 +265,12 @@ async function computeAndSaveRecommendations() {
     picks,
     secondaryPicks,
     comboOdds: picks.length >= 2 ? Number(comboOdds.toFixed(2)) : null,
-    threshold: { edge: EDGE_THRESHOLD, confidence: CONFIDENCE_THRESHOLD },
+    threshold: { edge: EDGE_THRESHOLD, confidence: CONFIDENCE_THRESHOLD, edgeBasis: "fair_devigged" },
   };
 
   await db.collection("recommendations").doc("current").set(payload);
   console.log(
-    `[recommendations] analyzed=${totalAnalyzed} passed=${strongCandidates.length} picks=${picks.length} secondary=${secondaryPicks.length}`
+    `[recommendations] analyzed=${totalAnalyzed} noFair=${droppedNoFair} lowEdge=${droppedLowEdge} passed=${strongCandidates.length} picks=${picks.length} secondary=${secondaryPicks.length}`
   );
   return payload;
 }
@@ -657,7 +713,7 @@ async function runFullAnalysis(match, standings, oddsEvents) {
     (kickoffDate.getTime() - Date.now()) / (60 * 60 * 1000)
   );
 
-  return await analyzeMatch({
+  const analysis = await analyzeMatch({
     home: match.home,
     away: match.away,
     kickoff: kickoffDate.toISOString(),
@@ -675,4 +731,15 @@ async function runFullAnalysis(match, standings, oddsEvents) {
     isFanTeam:
       match.homeId === ARSENAL_TEAM_ID || match.awayId === ARSENAL_TEAM_ID,
   });
+
+  // Augment the analysis with the fair-probability snapshot so the
+  // recommendation engine can compute edge against a de-vigged sharp
+  // book instead of raw market odds.
+  const fairProbs = computeFairProbs(odds);
+  const fairSource = odds?.fair?.bookTitle || odds?.fair?.book || null;
+  return {
+    ...analysis,
+    fairProbs,
+    fairSource,
+  };
 }
