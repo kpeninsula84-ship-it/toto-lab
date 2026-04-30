@@ -17,7 +17,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, collection, getDoc, getDocs, doc, query, where, orderBy, Timestamp, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getFirestore, collection, getDoc, getDocs, doc, query, where, orderBy, limit, Timestamp, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyASY-tE9WfcUzFoZ3vCy5lQOX0m5g61A5A",
@@ -372,10 +372,105 @@
       } catch {}
     }
 
+    async function loadArchive() {
+      const container = document.getElementById("archive");
+      try {
+        const q = query(
+          collection(db, "matches"),
+          where("result", "in", ["won", "lost"]),
+          orderBy("kickoff", "desc"),
+          limit(50)
+        );
+        const snap = await getDocs(q);
+
+        if (snap.empty) {
+          container.innerHTML = `<p class="text-gray-500 text-sm text-center py-4">No recorded results yet.</p>`;
+          return;
+        }
+
+        const rows = [];
+        snap.forEach((d) => {
+          const m = d.data();
+          if (!m.pick) return;
+          const kickoff = m.kickoff.toDate ? m.kickoff.toDate() : new Date(m.kickoff);
+          const dateStr = kickoff.toLocaleString("en-GB", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+          const won = m.result === "won";
+
+          const pickOdds =
+            m.pick === "home" ? m.odds?.matchWinner?.home ?? m.odds?.home
+            : m.pick === "draw" ? m.odds?.matchWinner?.draw ?? m.odds?.draw
+            : m.pick === "away" ? m.odds?.matchWinner?.away ?? m.odds?.away
+            : m.pick === "over" || m.pick === "over25" ? m.odds?.overUnder?.over ?? m.odds?.over
+            : m.pick === "under" || m.pick === "under25" ? m.odds?.overUnder?.under ?? m.odds?.under
+            : null;
+
+          const pl = pickOdds
+            ? won ? `+£${((pickOdds - 1) * 10).toFixed(2)}` : `-£10.00`
+            : "-";
+          const plColor = won ? "text-green-400" : "text-red-400";
+
+          const ouLine = m.ouLine ?? 2.5;
+          const pickLabel =
+            m.pick === "over" ? `Over ${ouLine}`
+            : m.pick === "under" ? `Under ${ouLine}`
+            : m.pick === "over25" ? "Over 2.5"
+            : m.pick === "under25" ? "Under 2.5"
+            : PICK_LABEL[m.pick] || m.pick;
+
+          const score = m.finalScore
+            ? `<span class="text-gray-400">${m.finalScore.home}–${m.finalScore.away}</span>`
+            : "";
+
+          rows.push(`
+            <tr class="border-t border-gray-700 hover:bg-gray-800/50 transition">
+              <td class="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap">${dateStr}</td>
+              <td class="py-2 pr-3 text-sm text-white">${m.home} vs ${m.away} ${score}</td>
+              <td class="py-2 pr-3 text-sm text-gray-300">${pickLabel}</td>
+              <td class="py-2 pr-3 text-sm text-gray-300">${pickOdds ?? "-"}</td>
+              <td class="py-2 pr-3 text-xs text-gray-400">+${m.edge ?? "-"}%</td>
+              <td class="py-2 pr-3">
+                <span class="text-xs px-2 py-0.5 rounded ${won ? "bg-green-700 text-green-100" : "bg-red-800 text-red-200"}">
+                  ${won ? "✓ Won" : "✗ Lost"}
+                </span>
+              </td>
+              <td class="py-2 text-sm font-mono ${plColor}">${pl}</td>
+            </tr>`);
+        });
+
+        if (rows.length === 0) {
+          container.innerHTML = `<p class="text-gray-500 text-sm text-center py-4">No recorded results yet.</p>`;
+          return;
+        }
+
+        container.innerHTML = `
+          <h3 class="text-lg font-bold text-white mb-3">Past Picks</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left">
+              <thead>
+                <tr class="text-xs text-gray-500">
+                  <th class="pb-2 pr-3 font-normal">Date</th>
+                  <th class="pb-2 pr-3 font-normal">Match</th>
+                  <th class="pb-2 pr-3 font-normal">Pick</th>
+                  <th class="pb-2 pr-3 font-normal">Odds</th>
+                  <th class="pb-2 pr-3 font-normal">Edge</th>
+                  <th class="pb-2 pr-3 font-normal">Result</th>
+                  <th class="pb-2 font-normal">P&L</th>
+                </tr>
+              </thead>
+              <tbody>${rows.join("")}</tbody>
+            </table>
+          </div>
+        `;
+      } catch (err) {
+        container.innerHTML = `<p class="text-red-400 text-sm text-center py-4">Failed to load archive: ${err.message}</p>`;
+      }
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
       loadRecommendations();
       loadMatches();
       loadStats();
+      loadArchive();
       trackAndDisplayVisits();
     });
   </script>
@@ -392,6 +487,7 @@
     <h2 class="text-xl font-semibold mb-4">All Analysed Fixtures</h2>
     <div id="matches" class="grid gap-4"></div>
     <section id="stats" class="mt-10"></section>
+    <section id="archive" class="mt-10"></section>
   </main>
   <footer class="border-t border-gray-800 py-6 px-4 mt-12">
     <div class="max-w-4xl mx-auto text-center text-xs text-gray-600 space-y-1">
