@@ -14,6 +14,7 @@ import {
 import { getEPLOdds, findOddsForMatch } from "./oddsApi.js";
 import { analyzeMatch, fetchTeamInjuries } from "./analyzer.js";
 import { devigMatchWinner, devigTwoWay } from "./devig.js";
+import { resolveTeamName } from "./teamAliases.js";
 
 initializeApp();
 setGlobalOptions({ region: "asia-northeast3", maxInstances: 5 });
@@ -531,26 +532,32 @@ export const updateInjuriesBulk = onRequest(
 
       const results = [];
       for (const [teamName, data] of Object.entries(payload)) {
-        const teamId = nameToId.get(teamName);
-        if (!teamId) {
+        const resolved = resolveTeamName(teamName, nameToId);
+        if (!resolved) {
+          console.warn(`[injuries] unresolved team name: "${teamName}"`);
           results.push({ teamName, error: "team not found in standings" });
           continue;
         }
+        if (resolved.method !== "exact") {
+          console.log(`[injuries] "${teamName}" → "${resolved.canonicalName}" (${resolved.method})`);
+        }
+        const { teamId, canonicalName } = resolved;
         await db.collection("injuries").doc(String(teamId)).set({
           teamId,
-          teamName,
+          teamName: canonicalName,
           updatedAt: Timestamp.now(),
           out: Array.isArray(data.out) ? data.out : [],
           doubtful: Array.isArray(data.doubtful) ? data.doubtful : [],
         });
         results.push({
-          teamName,
+          teamName: canonicalName,
+          ...(resolved.method !== "exact" && { resolvedFrom: teamName, resolvedVia: resolved.method }),
           out: data.out?.length ?? 0,
           doubtful: data.doubtful?.length ?? 0,
         });
       }
 
-      res.json({ ok: true, updated: results.length, results });
+      res.json({ ok: true, updated: results.filter((r) => !r.error).length, results });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
