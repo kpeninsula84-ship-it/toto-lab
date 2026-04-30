@@ -1,5 +1,6 @@
 import { onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
@@ -762,3 +763,57 @@ async function runFullAnalysis(match, standings, oddsEvents) {
     fairSource,
   };
 }
+
+async function sendTelegram(text) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) {
+    console.log("[telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — skipping");
+    return;
+  }
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`[telegram] sendMessage failed: ${res.status} ${body}`);
+  }
+}
+
+// Fires when recommendations/current is written.
+// Sends a Telegram alert only when new value picks are present.
+export const notifyTelegram = onDocumentWritten(
+  { document: "recommendations/current", region: "asia-northeast3" },
+  async (event) => {
+    const after = event.data?.after?.data();
+    if (!after) return;
+
+    const picks = after.picks || [];
+    if (picks.length === 0) return;
+
+    // Avoid re-notifying for the same set of picks (compare pick fixture IDs).
+    const before = event.data?.before?.data();
+    const beforeIds = (before?.picks || []).map((p) => p.fixtureId).sort().join(",");
+    const afterIds = picks.map((p) => p.fixtureId).sort().join(",");
+    if (beforeIds === afterIds) return;
+
+    const PICK_LABEL_KR = {
+      home: "홈 승", draw: "무승부", away: "원정 승",
+    };
+    const pickLines = picks.map((p, i) => {
+      const kickoff = p.kickoff?.toDate ? p.kickoff.toDate() : new Date(p.kickoff);
+      const dateStr = kickoff.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      const label = p.pickLabel || PICK_LABEL_KR[p.pick] || p.pick;
+      return `${i + 1}. <b>${p.home} vs ${p.away}</b> (${dateStr})\n   ${label} @${p.odds} · Edge +${p.edge}% · EV +${p.ev}%`;
+    }).join("\n\n");
+
+    const acca = after.comboOdds
+      ? `\n\n🎲 어큐뮬레이터: <b>${after.comboOdds}x</b> (£10 → £${(10 * after.comboOdds).toFixed(2)})`
+      : "";
+
+    const msg = `⚽ <b>TotoLab — 새 값 픽 ${picks.length}개</b>\n\n${pickLines}${acca}`;
+    await sendTelegram(msg);
+  }
+);

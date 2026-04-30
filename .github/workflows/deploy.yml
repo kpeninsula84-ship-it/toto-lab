@@ -31,6 +31,8 @@ jobs:
           FOOTBALL_DATA_TOKEN=${{ secrets.FOOTBALL_DATA_TOKEN }}
           ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}
           ADMIN_TOKEN=${{ secrets.ADMIN_TOKEN }}
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
           EOF
 
       - name: Deploy to Firebase
