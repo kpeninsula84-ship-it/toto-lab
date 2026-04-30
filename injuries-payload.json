@@ -1,82 +1,82 @@
 {
+  "AFC Bournemouth": {
+    "out": ["Justin Kluivert (knee surgery)"],
+    "doubtful": ["Lewis Cook (thigh, 50%)", "Julio Soler (thigh, 25%)"]
+  },
   "Arsenal FC": {
-    "out": ["Mikel Merino (ankle/foot surgery)"],
-    "doubtful": ["Jurrien Timber (groin)", "Bukayo Saka (calf, late fitness test)", "Riccardo Calafiori (late fitness test)"]
+    "out": ["Mikel Merino (ankle/foot surgery)", "Kai Havertz (groin)", "Jurrien Timber (groin)"],
+    "doubtful": ["Martin Odegaard (knee, 50%)"]
   },
   "Aston Villa FC": {
     "out": ["Boubacar Kamara (knee, season-ending)", "Alysson Franco (unknown)"],
-    "doubtful": []
-  },
-  "AFC Bournemouth": {
-    "out": ["Justin Kluivert (knee surgery)"],
-    "doubtful": ["Lewis Cook (thigh)", "Julio Soler (thigh)"]
+    "doubtful": ["Amadou Onana (knee, late fitness test)"]
   },
   "Brentford FC": {
-    "out": ["Fabio Carvalho (knee)", "Antoni Milambo (knee)", "Vitaly Janelt (ankle)", "Rico Henry (thigh)", "Joshua Dasilva (knee)", "Jordan Henderson (unknown)", "Kaye Furo (groin)"],
+    "out": ["Fabio Carvalho (knee)", "Antoni Milambo (knee)", "Vitaly Janelt (ankle)", "Rico Henry (thigh)", "Jordan Henderson (unknown)"],
     "doubtful": []
   },
   "Brighton & Hove Albion FC": {
-    "out": ["Stefanos Tzimas (ACL)", "Diego Gomez (knee)", "Adam Webster (knee ligament)", "James Milner (unknown)"],
-    "doubtful": ["Solomon March (muscle)"]
+    "out": ["Stefanos Tzimas (ACL)", "Diego Gomez (knee)", "Adam Webster (knee)", "James Milner (unknown)"],
+    "doubtful": ["Solomon March (muscle, 25%)"]
   },
   "Burnley FC": {
     "out": ["Josh Cullen (ACL)", "Connor Roberts (calf)", "Jordan Beyer (thigh)"],
-    "doubtful": ["Hannibal Mejbri (thigh)", "Axel Tuanzebe (calf)", "Zeki Amdouni (knee)"]
+    "doubtful": ["Hannibal Mejbri (thigh, 50%)", "Axel Tuanzebe (calf, 25%)", "Zeki Amdouni (knee, 25%)"]
   },
   "Chelsea FC": {
     "out": ["Estevao (thigh, season-ending)", "Levi Colwill (knee)", "Jamie Bynoe-Gittens (thigh)", "Filip Jorgensen (groin surgery)", "Mykhailo Mudryk (suspension, doping)"],
-    "doubtful": ["Reece James (thigh)", "Joao Pedro (thigh, late fitness test)", "Cole Palmer (thigh, late fitness test)"]
+    "doubtful": ["Reece James (thigh, 25%)"]
   },
   "Crystal Palace FC": {
-    "out": ["Eddie Nketiah (thigh, season-ending)", "Evann Guessand (knee)"],
-    "doubtful": ["Nathaniel Clyne (illness)", "Cheick Doucoure (muscle)"]
+    "out": ["Eddie Nketiah (thigh, season-ending)"],
+    "doubtful": ["Evann Guessand (knee, 25%)", "Cheick Doucoure (muscle, 25%)"]
   },
   "Everton FC": {
     "out": ["Jarrad Branthwaite (thigh, season-ending)", "Jack Grealish (ankle, season-ending)", "Beto (concussion)"],
     "doubtful": []
   },
   "Fulham FC": {
-    "out": ["Kevin Santos (ankle)", "Alex Iwobi (thigh)"],
-    "doubtful": ["Kenny Tete (ankle)"]
+    "out": ["Kevin (ankle)", "Alex Iwobi (thigh)"],
+    "doubtful": ["Kenny Tete (ankle, 25%)", "Ryan Sessegnon (muscle, 25%)"]
   },
   "Leeds United FC": {
-    "out": ["Ilia Gruev (meniscus, season-ending)"],
-    "doubtful": ["Anton Stach (ankle)", "Jayden Bogle (ankle)", "Sebastiaan Bornauw (ankle)"]
+    "out": ["Ilia Gruev (meniscus, season-ending)", "Gabriel Gudmundsson (hamstring)"],
+    "doubtful": ["Noah Okafor (calf, late fitness test)", "Jaka Bijol (hip flexor, late fitness test)"]
   },
   "Liverpool FC": {
-    "out": ["Conor Bradley (knee surgery)", "Hugo Ekitike (calf surgery)", "Giovanni Leoni (ACL)", "Wataru Endo (ankle)", "Giorgi Mamardashvili (knee)", "Jayden Danns (thigh)"],
-    "doubtful": ["Alisson Becker (late fitness test)"]
+    "out": ["Conor Bradley (knee surgery)", "Hugo Ekitike (calf surgery)", "Giovanni Leoni (ACL)", "Mohamed Salah (hamstring tear)", "Wataru Endo (ankle)", "Giorgi Mamardashvili (knee)", "Jayden Danns (thigh)"],
+    "doubtful": ["Alisson Becker (50%)"]
   },
   "Manchester City FC": {
     "out": ["Josko Gvardiol (calf)", "Ruben Dias (thigh)"],
-    "doubtful": ["Rodri (groin)"]
+    "doubtful": ["Rodri (groin, 25%)"]
   },
   "Manchester United FC": {
-    "out": ["Matthijs de Ligt (lower back)", "Lisandro Martinez (suspension)", "Patrick Dorgu (thigh)"],
-    "doubtful": ["Leny Yoro (late fitness test)"]
+    "out": ["Matthijs de Ligt (lower back)", "Lisandro Martinez (suspension)"],
+    "doubtful": ["Matheus Cunha (hip flexor, 50%)", "Luke Shaw (muscular, 25%)"]
   },
   "Newcastle United FC": {
     "out": ["Emil Krafth (knee surgery)", "Valentino Livramento (groin)", "Fabian Schar (foot infection surgery)", "Joelinton (suspension, 10 yellows)"],
-    "doubtful": ["Anthony Gordon (groin)"]
+    "doubtful": ["Anthony Gordon (groin, 25%)"]
   },
   "Nottingham Forest FC": {
-    "out": ["Callum Hudson-Odoi (thigh surgery, season-ending)", "John Victor (knee)", "Nicolo Savona (knee surgery)", "Murillo (thigh muscle)", "Willy Boly (knee)"],
-    "doubtful": []
+    "out": ["Callum Hudson-Odoi (thigh surgery, season-ending)", "John Victor (knee)", "Nicolo Savona (knee surgery)", "Willy Boly (knee)"],
+    "doubtful": ["Murillo (thigh, 25%)", "Jair Cunha (shoulder, late fitness test)", "Ibrahim Sangare (late fitness test)", "Dan Ndoye (late fitness test)"]
   },
   "Sunderland AFC": {
     "out": ["Romaine Mundle (thigh)", "Bertrand Traore (knee)", "Nilson Angulo (unknown)", "Simon Moore (wrist)"],
-    "doubtful": ["Jocelin Ta Bi (ankle)"]
+    "doubtful": ["Jocelin Ta Bi (ankle, 50%)"]
   },
   "Tottenham Hotspur FC": {
-    "out": ["Wilson Odobert (ACL)", "Mohammed Kudus (thigh surgery)", "Dejan Kulusevski (knee)", "Cristian Romero (knee)", "Ben Davies (ankle surgery)"],
-    "doubtful": ["Guglielmo Vicario (groin)", "Destiny Udogie (muscle)", "Pape Matar Sarr (shoulder)"]
+    "out": ["Xavi Simons (ACL)", "Wilson Odobert (ACL)", "Mohammed Kudus (thigh surgery)", "Dejan Kulusevski (knee)", "Cristian Romero (knee)", "Ben Davies (ankle surgery)"],
+    "doubtful": ["Guglielmo Vicario (groin, 25%)", "Destiny Udogie (muscle, 25%)", "Pape Matar Sarr (shoulder, 25%)", "Dominic Solanke (thigh, 25%)"]
   },
   "West Ham United FC": {
-    "out": [],
+    "out": ["Lukasz Fabianski (lower back)"],
     "doubtful": []
   },
   "Wolverhampton Wanderers FC": {
     "out": ["Sam Johnstone (shoulder)", "Yerson Mosquera (suspension, 10 yellows)", "Enso Gonzalez (knee)"],
-    "doubtful": ["Jose Sa (shoulder, late fitness test)", "Angel Gomes (ankle, late fitness test)", "Ladislav Krejci (neck, late fitness test)"]
+    "doubtful": ["Ladislav Krejci (neck, 50%)"]
   }
 }
