@@ -100,10 +100,12 @@ function computeFairProbs(odds) {
   const sharpMW = odds.fair?.matchWinner ?? odds.market?.matchWinner ?? odds.matchWinner ?? null;
   const sharpTotals = odds.fair?.totals?.best ?? odds.market?.totals?.best ?? odds.overUnder ?? null;
   const out = {};
-  const mw = sharpMW ? devigMatchWinner(sharpMW) : null;
+  // 1X2: Power method (better for 3-way multi-outcome markets)
+  const mw = sharpMW ? devigMatchWinner(sharpMW, "power") : null;
   if (mw) out.matchWinner = mw;
   if (sharpTotals?.over && sharpTotals?.under) {
-    const tw = devigTwoWay(sharpTotals.over, sharpTotals.under);
+    // O/U: Shin method (designed for 2-way markets with insider-trading correction)
+    const tw = devigTwoWay(sharpTotals.over, sharpTotals.under, "shin");
     if (tw) out.overUnder = { line: sharpTotals.line, over: tw[0], under: tw[1] };
   }
   return Object.keys(out).length ? out : null;
