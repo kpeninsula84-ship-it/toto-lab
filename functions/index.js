@@ -409,45 +409,55 @@ export const analyzeSaturday = onSchedule(
   }
 );
 
-// Daily 09:00 KST — fetch finished match results, update Firestore, recompute stats
-export const collectResults = onSchedule(
-  {
-    schedule: "0 9 * * *",
-    timeZone: "Asia/Seoul",
-    timeoutSeconds: 120,
-  },
-  async () => {
-    const now = new Date();
-    const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
-    const dateFrom = threeDaysAgo.toISOString().split("T")[0];
-    const dateTo = now.toISOString().split("T")[0];
+async function runCollectResults() {
+  const now = new Date();
+  const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+  const dateFrom = threeDaysAgo.toISOString().split("T")[0];
+  const dateTo = now.toISOString().split("T")[0];
 
-    const finished = await getFinishedMatches({ dateFrom, dateTo });
-    console.log(`[results] fetched ${finished.length} finished matches`);
+  const finished = await getFinishedMatches({ dateFrom, dateTo });
+  console.log(`[results] fetched ${finished.length} finished matches`);
 
-    let updated = 0;
-    for (const f of finished) {
-      const ref = db.collection("matches").doc(String(f.fixtureId));
-      const snap = await ref.get();
-      if (!snap.exists) continue;
+  let updated = 0;
+  for (const f of finished) {
+    const ref = db.collection("matches").doc(String(f.fixtureId));
+    const snap = await ref.get();
+    if (!snap.exists) continue;
 
-      const m = snap.data();
-      if (m.result) continue; // already recorded
+    const m = snap.data();
+    if (m.result) continue; // already recorded
 
-      const won = didPickWin(m.pick, f.score, m.ouLine);
-      await ref.update({
-        finalScore: f.score,
-        actualWinner: f.winner,
-        result: won === null ? "no_bet" : won ? "won" : "lost",
-        resultRecordedAt: Timestamp.now(),
-        status: "FINISHED",
-      });
-      updated++;
-    }
-
-    console.log(`[results] updated ${updated} match docs`);
-    await computeAndSaveStats();
+    const won = didPickWin(m.pick, f.score, m.ouLine);
+    await ref.update({
+      finalScore: f.score,
+      actualWinner: f.winner,
+      result: won === null ? "no_bet" : won ? "won" : "lost",
+      resultRecordedAt: Timestamp.now(),
+      status: "FINISHED",
+    });
+    updated++;
   }
+
+  console.log(`[results] updated ${updated} match docs`);
+  await computeAndSaveStats();
+}
+
+// Daily 09:00 KST
+export const collectResults = onSchedule(
+  { schedule: "0 9 * * *", timeZone: "Asia/Seoul", timeoutSeconds: 120 },
+  runCollectResults
+);
+
+// Saturday 23:00 KST — picks up Saturday evening results same night
+export const collectResultsSatNight = onSchedule(
+  { schedule: "0 23 * * 6", timeZone: "Asia/Seoul", timeoutSeconds: 120 },
+  runCollectResults
+);
+
+// Sunday 23:00 KST — picks up Sunday evening results same night
+export const collectResultsSunNight = onSchedule(
+  { schedule: "0 23 * * 0", timeZone: "Asia/Seoul", timeoutSeconds: 120 },
+  runCollectResults
 );
 
 // DISABLED: web_search-based injury collection hits Anthropic rate limits
