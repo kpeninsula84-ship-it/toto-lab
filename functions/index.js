@@ -757,10 +757,23 @@ async function runFullAnalysis(match, standings, oddsEvents) {
   // book instead of raw market odds.
   const fairProbs = computeFairProbs(odds);
   const fairSource = odds?.fair?.bookTitle || odds?.fair?.book || null;
+
+  // Pre-compute the fair (de-vigged) edge for the picked market so the UI
+  // can show the same value the recommendation engine uses for selection,
+  // instead of Claude's raw self-reported edge against the soft market.
+  const matchView = { ...analysis, fairProbs };
+  const fairProb = getFairProbForPick(matchView);
+  const pickProb = getProbForPick(matchView);
+  const edgeFair =
+    fairProb != null && pickProb != null
+      ? Math.round((pickProb - fairProb * 100) * 10) / 10
+      : null;
+
   return {
     ...analysis,
     fairProbs,
     fairSource,
+    edgeFair,
   };
 }
 
