@@ -1,0 +1,20 @@
+{
+  "name": "toto-lab-worker",
+  "version": "0.1.0",
+  "description": "Analysis worker that runs on Mac/NAS and writes recommendations to Firestore via the ai-debate bridge (zero Anthropic API spend).",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "fixtures": "node runOnce.js fixtures",
+    "analyze": "node runOnce.js analyze",
+    "results": "node runOnce.js results",
+    "full": "node runOnce.js full",
+    "validate": "node analyze-saturday.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  }
+}

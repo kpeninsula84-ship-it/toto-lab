@@ -6,3 +6,8 @@ node_modules/
 *.log
 firebase-debug.log*
 .firebaserc.local
+
+# Worker (NAS/Mac analysis pipeline)
+worker/service-account.json
+worker/saturday-analysis*.json
+worker/node_modules/

@@ -3,7 +3,8 @@ const BASE_URL = "https://api.the-odds-api.com/v4";
 function normalize(name) {
   return name
     .toLowerCase()
-    .replace(/\s+(fc|afc)$/i, "")
+    .replace(/^afc\s+/i, "")           // leading "AFC Bournemouth" → "bournemouth"
+    .replace(/\s+(fc|afc)$/i, "")      // trailing FC/AFC suffix
     .replace(/\s+and\s+/gi, " & ")
     .trim();
 }
