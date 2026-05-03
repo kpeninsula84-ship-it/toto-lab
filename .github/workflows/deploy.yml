@@ -1,61 +1,41 @@
-name: Deploy to Firebase
+name: Deploy toto-lab
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-toto-lab
+  cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
+      - name: Run deploy.sh on the VPS
+        # deploy.sh handles git pull, conditional npm install (functions/worker),
+        # and `firebase deploy`. Worker code on disk is picked up by the next
+        # totolab-worker.timer firing automatically.
+        run: /root/deploy.sh toto-lab
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: functions/package-lock.json
-
-      - name: Install functions dependencies
-        run: npm install
-        working-directory: functions
-
-      - name: Create functions .env from secrets
+      - name: Upload injuries-payload.json if changed
         run: |
-          cat > functions/.env <<EOF
-          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
-          FOOTBALL_DATA_TOKEN=${{ secrets.FOOTBALL_DATA_TOKEN }}
-          ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}
-          ADMIN_TOKEN=${{ secrets.ADMIN_TOKEN }}
-          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
-          EOF
-
-      - name: Deploy to Firebase
-        uses: w9jds/firebase-action@master
-        with:
-          args: deploy --only functions,hosting,firestore --project toto-lab --force
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-
-      - name: Upload injuries to Firestore (if changed)
-        run: |
-          if [ -f "injuries-payload.json" ]; then
-            CHANGED=$(git diff --name-only HEAD~1 HEAD -- injuries-payload.json 2>/dev/null || true)
-            if [ -n "$CHANGED" ]; then
-              echo "injuries-payload.json changed — uploading to Firestore..."
-              curl -f -X POST \
-                -H "Content-Type: application/json" \
-                -H "x-admin-token: ${{ secrets.ADMIN_TOKEN }}" \
-                --data "@injuries-payload.json" \
-                https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk
-            else
-              echo "injuries-payload.json not changed — skipping upload."
+          cd /root/toto-lab
+          if git diff --name-only HEAD~1 HEAD -- injuries-payload.json 2>/dev/null | grep -q .; then
+            echo "injuries-payload.json changed — uploading to Firestore"
+            ADMIN_TOKEN=$(grep '^ADMIN_TOKEN=' functions/.env | cut -d= -f2-)
+            if [ -z "$ADMIN_TOKEN" ]; then
+              echo "::warning::ADMIN_TOKEN not found in functions/.env — skipping upload"
+              exit 0
             fi
+            curl -fsS -X POST \
+              -H "Content-Type: application/json" \
+              -H "x-admin-token: $ADMIN_TOKEN" \
+              --data "@injuries-payload.json" \
+              https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk \
+              && echo "✅ injuries upload OK"
           else
-            echo "injuries-payload.json not found — skipping upload."
+            echo "injuries-payload.json unchanged — skipping"
           fi
