@@ -57,31 +57,55 @@ WORKER_ONLY="Bournemouth,Aston Villa" node analyze-saturday.mjs
 
 ## Scheduling on Mac (launchd)
 
-Drop a plist into `~/Library/LaunchAgents/`:
+Two plist files are checked into `worker/launchd/`:
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>app.totolab.analyze</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/node</string>
-    <string>/Users/dw/Projects/toto-lab/worker/runOnce.js</string>
-    <string>full</string>
-    <string>48</string>
-  </array>
-  <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
-  <key>StandardOutPath</key><string>/tmp/totolab-worker.log</string>
-  <key>StandardErrorPath</key><string>/tmp/totolab-worker.log</string>
-</dict>
-</plist>
+| Plist | Purpose | When |
+|---|---|---|
+| `app.aidebate.server.plist` | Keep ai-debate server running on port 3000 | Always (boot + restart-on-crash) |
+| `app.totolab.analyze.plist` | Run worker pipeline | Daily 13:00 KST |
+
+The worker plist invokes `worker/run-scheduled.sh`, a wrapper that:
+1. `git pull origin main` (so code pushed from any PC is picked up)
+2. `npm install` if needed
+3. `node runOnce.js full 48`
+
+Install on this Mac:
+
+```bash
+# Copy plists into LaunchAgents
+cp worker/launchd/app.aidebate.server.plist ~/Library/LaunchAgents/
+cp worker/launchd/app.totolab.analyze.plist ~/Library/LaunchAgents/
+
+# Load them with launchctl
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.aidebate.server.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.totolab.analyze.plist
+
+# Verify
+launchctl print gui/$(id -u)/app.totolab.analyze | head -5
 ```
 
-Then `launchctl load ~/Library/LaunchAgents/app.totolab.analyze.plist`.
+Tail logs:
+```bash
+tail -f /tmp/totolab-worker.log
+tail -f /tmp/aidebate-server.log
+```
+
+Manual run (without waiting for schedule):
+```bash
+launchctl kickstart -k gui/$(id -u)/app.totolab.analyze
+```
+
+Uninstall:
+```bash
+launchctl bootout gui/$(id -u)/app.totolab.analyze
+launchctl bootout gui/$(id -u)/app.aidebate.server
+rm ~/Library/LaunchAgents/app.totolab.analyze.plist
+rm ~/Library/LaunchAgents/app.aidebate.server.plist
+```
+
+**Mac sleep behavior**: launchd does NOT replay missed `StartCalendarInterval`
+runs. If the Mac is asleep at 13:00 KST, that day's analysis is missed. Either
+keep the Mac awake during the analysis window or use `pmset schedule wake`.
 
 ## Scheduling on NAS (cron)
 

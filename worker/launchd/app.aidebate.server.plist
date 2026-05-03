@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>app.aidebate.server</string>
+
+  <!-- Boot the ai-debate server (not the client) so worker can hit it.
+       The bridge route /api/analyze lives only in the server process. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>server/index.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/dw/Projects/ai-debate</string>
+
+  <!-- Keep server running; restart on crash. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/aidebate-server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/aidebate-server.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
