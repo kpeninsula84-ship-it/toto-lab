@@ -9,28 +9,34 @@
 const AI_DEBATE_URL = process.env.AI_DEBATE_URL || "http://localhost:3000";
 const MODEL = process.env.AI_DEBATE_MODEL || "claude-sonnet-4-6";
 
-async function bridgeAnalyze({ systemPrompt, userPrompt }) {
+async function bridgeAnalyze({ systemPrompt, userPrompt, tools }) {
+  const body = { systemPrompt, userPrompt, model: MODEL };
+  if (tools && tools.length > 0) body.tools = tools;
   const res = await fetch(`${AI_DEBATE_URL}/api/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ systemPrompt, userPrompt, model: MODEL }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`ai-debate ${res.status}: ${body}`);
+    const text = await res.text();
+    throw new Error(`ai-debate ${res.status}: ${text}`);
   }
   return res.json(); // { data, usage }
 }
 
 export async function fetchTeamInjuries(teamName) {
-  const systemPrompt = `You are a football injury data extractor. Use web_search to find current injury and suspension news for the given Premier League team. Only return players whose absence/doubt would meaningfully affect a match outcome (top scorers, key defenders, creative midfielders).`;
-  const userPrompt = `Search the web for the most recent (last 7 days) injury and suspension status for "${teamName}" in the Premier League 2025-26 season. Use web_search.
+  const systemPrompt = `You are a football injury data extractor. Use the WebSearch tool to find current injury and suspension news for the given Premier League team. Only return players whose absence/doubt would meaningfully affect a match outcome (top scorers, key defenders, creative midfielders).`;
+  const userPrompt = `Search the web for the most recent (last 7 days) injury and suspension status for "${teamName}" in the Premier League 2025-26 season.
 
 Return ONLY this JSON shape (no prose, no fences):
 {"out":["Player Name (reason)"],"doubtful":["Player Name (reason)"]}`;
 
   try {
-    const { data, usage } = await bridgeAnalyze({ systemPrompt, userPrompt });
+    const { data, usage } = await bridgeAnalyze({
+      systemPrompt,
+      userPrompt,
+      tools: ["WebSearch"],
+    });
     return { ...data, _tokens: usage };
   } catch (err) {
     console.error(`[injuries] ${teamName} failed: ${err.message}`);
