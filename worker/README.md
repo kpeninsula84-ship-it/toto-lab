@@ -61,7 +61,7 @@ Two plist files are checked into `worker/launchd/`:
 
 | Plist | Purpose | When |
 |---|---|---|
-| `app.aidebate.server.plist` | Keep ai-debate server running on port 3000 | Always (boot + restart-on-crash) |
+| `app.aidebate.plist` | Keep ai-debate (server + client) running via `npm start` on port 3000 | Always (boot + restart-on-crash) |
 | `app.totolab.analyze.plist` | Run worker pipeline | Daily 13:00 KST |
 
 The worker plist invokes `worker/run-scheduled.sh`, a wrapper that:
@@ -73,11 +73,11 @@ Install on this Mac:
 
 ```bash
 # Copy plists into LaunchAgents
-cp worker/launchd/app.aidebate.server.plist ~/Library/LaunchAgents/
+cp worker/launchd/app.aidebate.plist ~/Library/LaunchAgents/
 cp worker/launchd/app.totolab.analyze.plist ~/Library/LaunchAgents/
 
 # Load them with launchctl
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.aidebate.server.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.aidebate.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.totolab.analyze.plist
 
 # Verify
@@ -87,7 +87,7 @@ launchctl print gui/$(id -u)/app.totolab.analyze | head -5
 Tail logs:
 ```bash
 tail -f /tmp/totolab-worker.log
-tail -f /tmp/aidebate-server.log
+tail -f /tmp/aidebate.log
 ```
 
 Manual run (without waiting for schedule):
@@ -98,9 +98,9 @@ launchctl kickstart -k gui/$(id -u)/app.totolab.analyze
 Uninstall:
 ```bash
 launchctl bootout gui/$(id -u)/app.totolab.analyze
-launchctl bootout gui/$(id -u)/app.aidebate.server
+launchctl bootout gui/$(id -u)/app.aidebate
 rm ~/Library/LaunchAgents/app.totolab.analyze.plist
-rm ~/Library/LaunchAgents/app.aidebate.server.plist
+rm ~/Library/LaunchAgents/app.aidebate.plist
 ```
 
 **Mac sleep behavior**: launchd does NOT replay missed `StartCalendarInterval`

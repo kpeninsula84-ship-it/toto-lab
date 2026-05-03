@@ -10,7 +10,8 @@
 set -euo pipefail
 
 REPO_DIR="${TOTOLAB_REPO_DIR:-/Users/dw/Projects/toto-lab}"
-NODE_BIN="${TOTOLAB_NODE_BIN:-/usr/local/bin/node}"
+NODE_BIN="${TOTOLAB_NODE_BIN:-/opt/homebrew/bin/node}"
+NPM_BIN="${TOTOLAB_NPM_BIN:-/opt/homebrew/bin/npm}"
 HORIZON_HOURS="${TOTOLAB_HORIZON:-48}"
 
 cd "$REPO_DIR"
@@ -25,7 +26,7 @@ cd worker
 
 if [ ! -d node_modules ]; then
   echo "[run-scheduled] installing worker deps"
-  npm install --silent
+  "$NPM_BIN" install --silent
 fi
 
 echo "[run-scheduled] running worker (horizon=${HORIZON_HOURS}h)"
