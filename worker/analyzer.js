@@ -90,6 +90,7 @@ Only flag players important enough to move probabilities (top scorers, key defen
 - If fan_team is true, STRICTLY data-driven.
 
 Reasoning array: 3-6 bullets. Include player status bucket if relevant (e.g., "Arsenal: Saka OUT (hamstring), Odegaard DOUBTFUL (knee)").
+reasoningKr: same bullets translated to Korean. Keep team names, player names, competition names, and numeric stats in English (e.g. "Arsenal: Saka OUT (hamstring)" → "Arsenal: Saka OUT (햄스트링)").
 
 Output STRICT JSON matching this shape:
 {
@@ -98,7 +99,8 @@ Output STRICT JSON matching this shape:
   "pick": "home|draw|away|over|under|none",
   "edge": int,
   "confidence": int,
-  "reasoning": [string, ...]
+  "reasoning": [string, ...],
+  "reasoningKr": [string, ...]
 }
 No markdown, no extra prose.`;
 }
@@ -170,6 +172,7 @@ export async function analyzeMatch(data) {
     edge: prediction.edge,
     confidence: prediction.confidence,
     reasoning: prediction.reasoning,
+    reasoningKr: prediction.reasoningKr ?? prediction.reasoning,
     isFanTeam: data.isFanTeam || false,
     odds: data.odds || null,
     model: MODEL,
