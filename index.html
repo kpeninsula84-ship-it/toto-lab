@@ -412,7 +412,8 @@
       const fanBadge = m.isFanTeam
         ? `<span class="text-xs px-2 py-1 rounded bg-red-600 text-white ml-2">${t("fanTeam")}</span>`
         : "";
-      const reasoningList = (m.reasoning || [])
+      const reasoningSource = (currentLang === "kr" && m.reasoningKr) ? m.reasoningKr : (m.reasoning || []);
+      const reasoningList = reasoningSource
         .map((r) => `<li class="text-xs text-gray-300 leading-relaxed">• ${r}</li>`)
         .join("");
 
