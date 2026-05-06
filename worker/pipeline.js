@@ -1,19 +1,17 @@
-// Analysis pipeline that runs from a worker (Mac/NAS) instead of Firebase
-// Functions. Combines fixture collection, ai-debate analysis, and
-// recommendation generation. Writes back to Firestore via the Admin SDK.
+// Analysis pipeline — runs daily at 12:00 KST on the VPS via systemd timer.
+// Re-analyzes every EPL match kicking off in the next 24 hours, so each
+// run picks up the freshest injury, odds, and form data.
 //
-// Mirrors the behavior of functions/index.js's collectFixtures,
-// runScheduledAnalysis, and computeAndSaveRecommendations.
+// Fixture collection (06:00 KST) and result collection (09:00 + Sat/Sun
+// 23:00 KST) live in functions/index.js. This worker is analysis-only.
 
 import { Timestamp } from "firebase-admin/firestore";
 import { db } from "./firestore.js";
 import {
-  getUpcomingMatches,
   getTeamRecentMatches,
   getTeamUpcomingFixtures,
   getHeadToHead,
   getStandings,
-  getFinishedMatches,
 } from "../functions/footballData.js";
 import { getEPLOdds, getEPLTeamTotals, findOddsForMatch } from "../functions/oddsApi.js";
 import { devigMatchWinner, devigTwoWay } from "../functions/devig.js";
@@ -24,8 +22,9 @@ export const EDGE_THRESHOLD = 5;
 export const CONFIDENCE_THRESHOLD = 50;
 export const SECONDARY_CONFIDENCE_MIN = 40;
 export const MAX_PICKS = 3;
+export const DEFAULT_HORIZON_HOURS = 24;
 
-// ---- pick helpers (mirror functions/index.js) ------------------------------
+// pick helpers ---------------------------------------------------------------
 function getOddsForPick(match) {
   const { pick, odds } = match;
   if (!pick || !odds) return null;
@@ -36,6 +35,7 @@ function getOddsForPick(match) {
   if (pick === "under") return odds.overUnder?.under ?? null;
   return null;
 }
+
 function getProbForPick(match) {
   const { pick } = match;
   if (!pick) return null;
@@ -46,6 +46,7 @@ function getProbForPick(match) {
   if (pick === "under") return match.overUnder?.under ?? null;
   return null;
 }
+
 function getFairProbForPick(match) {
   const { pick, fairProbs } = match;
   if (!pick || !fairProbs) return null;
@@ -80,46 +81,7 @@ function pickLabel(pick, ouLine) {
   return pick;
 }
 
-// ---- collectFixtures -------------------------------------------------------
-export async function collectFixtures(daysAhead = 7) {
-  const today = new Date();
-  const dateFrom = today.toISOString().split("T")[0];
-  const later = new Date(today.getTime() + daysAhead * 24 * 60 * 60 * 1000);
-  const dateTo = later.toISOString().split("T")[0];
-
-  const matches = await getUpcomingMatches({ dateFrom, dateTo });
-  if (!matches.length) {
-    console.log(`[fixtures] no EPL matches ${dateFrom} ~ ${dateTo}`);
-    return;
-  }
-
-  const batch = db.batch();
-  for (const m of matches) {
-    const ref = db.collection("matches").doc(String(m.id));
-    batch.set(
-      ref,
-      {
-        fixtureId: m.id,
-        league: "EPL",
-        matchday: m.matchday,
-        kickoff: Timestamp.fromDate(new Date(m.utcDate)),
-        status: m.status,
-        home: m.homeTeam.name,
-        homeId: m.homeTeam.id,
-        homeShort: m.homeTeam.shortName,
-        away: m.awayTeam.name,
-        awayId: m.awayTeam.id,
-        awayShort: m.awayTeam.shortName,
-        collectedAt: Timestamp.now(),
-      },
-      { merge: true }
-    );
-  }
-  await batch.commit();
-  console.log(`[fixtures] collected ${matches.length} EPL fixtures ${dateFrom} ~ ${dateTo}`);
-}
-
-// ---- runFullAnalysis (per-match) ------------------------------------------
+// per-match analysis ---------------------------------------------------------
 async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
   const [homeRecent, awayRecent, homeUpcoming, awayUpcoming, h2h, homeInjuries, awayInjuries] =
     await Promise.all([
@@ -156,11 +118,7 @@ async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
     isFanTeam: match.homeId === ARSENAL_TEAM_ID || match.awayId === ARSENAL_TEAM_ID,
   });
 
-  // Persist injuries snapshot for transparency / audit
   const injuriesSnapshot = { home: homeInjuries, away: awayInjuries };
-
-  // Pre-compute fair edge for the picked market so the UI/notifier reads
-  // the same value used for selection.
   const fairProbs = computeFairProbs(odds);
   const fairSource = odds?.fair?.bookTitle || odds?.fair?.book || null;
   const matchView = { ...analysis, fairProbs };
@@ -174,8 +132,8 @@ async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
   return { ...analysis, fairProbs, fairSource, edgeFair, injuriesSnapshot };
 }
 
-// ---- runScheduledAnalysis -------------------------------------------------
-export async function runScheduledAnalysis(horizonHours = 48, label = "manual", { force = false } = {}) {
+// main entry — analyze every SCHEDULED/TIMED match in the next horizon -------
+export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS, label = "worker") {
   const now = Date.now();
   const horizon = Timestamp.fromMillis(now + horizonHours * 60 * 60 * 1000);
 
@@ -186,13 +144,12 @@ export async function runScheduledAnalysis(horizonHours = 48, label = "manual", 
     .get();
 
   const upcoming = snap.docs.filter((d) => {
-    const data = d.data();
-    const s = data.status;
-    return (s === "SCHEDULED" || s === "TIMED") && (force || !data.analyzed);
+    const s = d.data().status;
+    return s === "SCHEDULED" || s === "TIMED";
   });
 
   if (!upcoming.length) {
-    console.log(`[${label}] no unanalyzed EPL matches in next ${horizonHours}h`);
+    console.log(`[${label}] no upcoming EPL matches in next ${horizonHours}h`);
     return;
   }
 
@@ -222,7 +179,7 @@ export async function runScheduledAnalysis(horizonHours = 48, label = "manual", 
   await computeAndSaveRecommendations();
 }
 
-// ---- computeAndSaveRecommendations ----------------------------------------
+// recommendations ------------------------------------------------------------
 export async function computeAndSaveRecommendations() {
   const now = Timestamp.now();
   const snap = await db.collection("matches").where("kickoff", ">=", now).get();
@@ -295,44 +252,4 @@ export async function computeAndSaveRecommendations() {
   await db.collection("recommendations").doc("current").set(payload);
   console.log(`[recommendations] analyzed=${totalAnalyzed} passed=${strong.length} picks=${picks.length} secondary=${secondaryPicks.length}`);
   return payload;
-}
-
-// ---- collectResults --------------------------------------------------------
-function didPickWin(pick, score, ouLine) {
-  if (!pick || score?.home == null || score?.away == null) return null;
-  const total = score.home + score.away;
-  if (pick === "home") return score.home > score.away;
-  if (pick === "draw") return score.home === score.away;
-  if (pick === "away") return score.away > score.home;
-  if (pick === "over") return total > (ouLine ?? 2.5);
-  if (pick === "under") return total < (ouLine ?? 2.5);
-  if (pick === "over25") return total > 2.5;
-  if (pick === "under25") return total < 2.5;
-  return null;
-}
-
-export async function collectResults() {
-  const now = new Date();
-  const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
-  const dateFrom = threeDaysAgo.toISOString().split("T")[0];
-  const dateTo = now.toISOString().split("T")[0];
-
-  const finished = await getFinishedMatches({ dateFrom, dateTo });
-  console.log(`[results] fetched ${finished.length} finished matches`);
-
-  let updated = 0;
-  for (const f of finished) {
-    const ref = db.collection("matches").doc(String(f.fixtureId));
-    const snap = await ref.get();
-    if (!snap.exists) continue;
-    const m = snap.data();
-    const won = didPickWin(m.pick, f.score, m.ouLine);
-    await ref.update({
-      finalScore: f.score,
-      result: won == null ? null : won ? "won" : "lost",
-      finishedAt: Timestamp.now(),
-    });
-    updated++;
-  }
-  console.log(`[results] updated ${updated} matches`);
 }
