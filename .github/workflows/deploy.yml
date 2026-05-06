@@ -19,23 +19,3 @@ jobs:
         # and `firebase deploy`. Worker code on disk is picked up by the next
         # totolab-worker.timer firing automatically.
         run: /root/deploy.sh toto-lab
-
-      - name: Upload injuries-payload.json if changed
-        run: |
-          cd /root/toto-lab
-          if git diff --name-only HEAD~1 HEAD -- injuries-payload.json 2>/dev/null | grep -q .; then
-            echo "injuries-payload.json changed — uploading to Firestore"
-            ADMIN_TOKEN=$(grep '^ADMIN_TOKEN=' functions/.env | cut -d= -f2-)
-            if [ -z "$ADMIN_TOKEN" ]; then
-              echo "::warning::ADMIN_TOKEN not found in functions/.env — skipping upload"
-              exit 0
-            fi
-            curl -fsS -X POST \
-              -H "Content-Type: application/json" \
-              -H "x-admin-token: $ADMIN_TOKEN" \
-              --data "@injuries-payload.json" \
-              https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk \
-              && echo "✅ injuries upload OK"
-          else
-            echo "injuries-payload.json unchanged — skipping"
-          fi

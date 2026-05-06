@@ -4,28 +4,14 @@ import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
-import {
-  getUpcomingMatches,
-  getTeamRecentMatches,
-  getTeamUpcomingFixtures,
-  getHeadToHead,
-  getStandings,
-  getFinishedMatches,
-} from "./footballData.js";
-import { getEPLOdds, findOddsForMatch } from "./oddsApi.js";
-import { devigMatchWinner, devigTwoWay } from "./devig.js";
-import { resolveTeamName } from "./teamAliases.js";
+import { getUpcomingMatches, getFinishedMatches } from "./footballData.js";
 
 initializeApp();
 setGlobalOptions({ region: "asia-northeast3", maxInstances: 5 });
 
 const db = getFirestore();
-const ARSENAL_TEAM_ID = 57; // football-data.org team id
 
-const EDGE_THRESHOLD = 5;
-const CONFIDENCE_THRESHOLD = 50;
-const SECONDARY_CONFIDENCE_MIN = 40;
-const MAX_PICKS = 3;
+const FLAT_STAKE = 1000; // for ROI calc
 
 function requireAdmin(req, res) {
   const expected = process.env.ADMIN_TOKEN;
@@ -41,20 +27,7 @@ function requireAdmin(req, res) {
   return true;
 }
 
-const PICK_LABEL_STATIC = {
-  home: "홈 승",
-  draw: "무승부",
-  away: "원정 승",
-};
-
-function pickLabel(pick, ouLine) {
-  if (pick === "over") return `${ouLine} 오버`;
-  if (pick === "under") return `${ouLine} 언더`;
-  return PICK_LABEL_STATIC[pick] || pick;
-}
-
 // Market book (bet365 or fallback) — used for execution price (EV).
-// Reads the legacy flat shape so existing finished-match docs keep working.
 function getOddsForPick(match) {
   const { pick, odds } = match;
   if (!pick || !odds) return null;
@@ -65,53 +38,6 @@ function getOddsForPick(match) {
   if (pick === "under") return odds.overUnder?.under ?? null;
   return null;
 }
-
-// Model probability for the chosen pick (Claude output, 0-100 integers).
-function getProbForPick(match) {
-  const { pick } = match;
-  if (!pick) return null;
-  if (pick === "home") return match.probs?.home ?? null;
-  if (pick === "draw") return match.probs?.draw ?? null;
-  if (pick === "away") return match.probs?.away ?? null;
-  if (pick === "over") return match.overUnder?.over ?? null;
-  if (pick === "under") return match.overUnder?.under ?? null;
-  return null;
-}
-
-// Fair (de-vigged) probability for the chosen pick (0-1 fractions).
-// Returns null when the de-vig couldn't be computed for this market.
-function getFairProbForPick(match) {
-  const { pick, fairProbs } = match;
-  if (!pick || !fairProbs) return null;
-  if (pick === "home") return fairProbs.matchWinner?.home ?? null;
-  if (pick === "draw") return fairProbs.matchWinner?.draw ?? null;
-  if (pick === "away") return fairProbs.matchWinner?.away ?? null;
-  if (pick === "over") return fairProbs.overUnder?.over ?? null;
-  if (pick === "under") return fairProbs.overUnder?.under ?? null;
-  return null;
-}
-
-// Build the fairProbs block used by getFairProbForPick. Prefers the sharp
-// book snapshot (Pinnacle/Smarkets/Betfair) when available; otherwise falls
-// back to the market book itself, which still benefits from de-vig (just
-// against a softer reference). Returns null if no usable odds exist.
-function computeFairProbs(odds) {
-  if (!odds) return null;
-  const sharpMW = odds.fair?.matchWinner ?? odds.market?.matchWinner ?? odds.matchWinner ?? null;
-  const sharpTotals = odds.fair?.totals?.best ?? odds.market?.totals?.best ?? odds.overUnder ?? null;
-  const out = {};
-  // 1X2: Power method (better for 3-way multi-outcome markets)
-  const mw = sharpMW ? devigMatchWinner(sharpMW, "power") : null;
-  if (mw) out.matchWinner = mw;
-  if (sharpTotals?.over && sharpTotals?.under) {
-    // O/U: Shin method (designed for 2-way markets with insider-trading correction)
-    const tw = devigTwoWay(sharpTotals.over, sharpTotals.under, "shin");
-    if (tw) out.overUnder = { line: sharpTotals.line, over: tw[0], under: tw[1] };
-  }
-  return Object.keys(out).length ? out : null;
-}
-
-const FLAT_STAKE = 1000; // for ROI calc
 
 function didPickWin(pick, score, ouLine) {
   if (!pick || score?.home == null || score?.away == null) return null;
@@ -181,7 +107,6 @@ async function computeAndSaveStats() {
   return stats;
 }
 
-
 export const api = onRequest({ invoker: "public" }, async (req, res) => {
   res.json({
     status: "ok",
@@ -237,8 +162,6 @@ export const collectFixtures = onSchedule(
   }
 );
 
-// Shared analysis runner: fetches matches within [now, now+horizonHours], analyzes, saves recommendations.
-
 async function runCollectResults() {
   const now = new Date();
   const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
@@ -290,55 +213,6 @@ export const collectResultsSunNight = onSchedule(
   runCollectResults
 );
 
-// POST body: { "Arsenal FC": { out: ["name (reason)"], doubtful: [...] }, ... }
-export const updateInjuriesBulk = onRequest(
-  { invoker: "public", timeoutSeconds: 120 },
-  async (req, res) => {
-    if (req.method !== "POST") {
-      res.status(405).json({ error: "POST required" });
-      return;
-    }
-    if (!requireAdmin(req, res)) return;
-    try {
-      const payload = req.body || {};
-      const standings = await getStandings();
-      const nameToId = new Map(standings.map((s) => [s.team, s.teamId]));
-
-      const results = [];
-      for (const [teamName, data] of Object.entries(payload)) {
-        const resolved = resolveTeamName(teamName, nameToId);
-        if (!resolved) {
-          console.warn(`[injuries] unresolved team name: "${teamName}"`);
-          results.push({ teamName, error: "team not found in standings" });
-          continue;
-        }
-        if (resolved.method !== "exact") {
-          console.log(`[injuries] "${teamName}" → "${resolved.canonicalName}" (${resolved.method})`);
-        }
-        const { teamId, canonicalName } = resolved;
-        await db.collection("injuries").doc(String(teamId)).set({
-          teamId,
-          teamName: canonicalName,
-          updatedAt: Timestamp.now(),
-          out: Array.isArray(data.out) ? data.out : [],
-          doubtful: Array.isArray(data.doubtful) ? data.doubtful : [],
-        });
-        results.push({
-          teamName: canonicalName,
-          ...(resolved.method !== "exact" && { resolvedFrom: teamName, resolvedVia: resolved.method }),
-          out: data.out?.length ?? 0,
-          doubtful: data.doubtful?.length ?? 0,
-        });
-      }
-
-      res.json({ ok: true, updated: results.filter((r) => !r.error).length, results });
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: err.message });
-    }
-  }
-);
-
 // Manual HTTP trigger for collecting results
 export const collectResultsManual = onRequest(
   { invoker: "public", timeoutSeconds: 120 },
@@ -376,9 +250,6 @@ export const collectResultsManual = onRequest(
     }
   }
 );
-
-// Re-analyze all upcoming matches in next 36h (useful after injury data update).
-// Forces re-analysis even if `analyzed: true`.
 
 async function sendTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
