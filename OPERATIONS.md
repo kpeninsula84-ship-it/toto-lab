@@ -1,136 +1,158 @@
-# TotoLab 주간 운영 매뉴얼
+# TotoLab Operations
 
-매 경기일 전날, 분석 실행(12:00 KST) 전에 부상 데이터를 수동 업데이트한다.
-
----
-
-## 자동 실행 스케줄
-
-```
-매일 06:00 KST       자동: collectFixtures (다음 7일 경기 수집)
-월~금 12:00 KST      자동: analyzeWeekday (다음 24시간 경기 분석)
-토요일 12:00 KST     자동: analyzeSaturday (다음 48시간 경기 분석 — 토요일 저녁 + 일요일 전체)
-매일 09:00 KST       자동: collectResults (종료 경기 결과 수집 + 통계 갱신)
-```
+The system runs itself. There is no required weekly action.
 
 ---
 
-## 타임라인 (경기 있는 날 기준)
+## Automated schedule
+
+All times KST.
 
 ```
-전날 또는 당일 11:00 이전   부상 데이터 수동 업데이트 (이 매뉴얼)
-당일 12:00 KST              자동: analyzeWeekday 또는 analyzeSaturday (부상 데이터 반영)
-당일 오후 이후              사이트에 값 픽 표시
-다음날 09:00 KST            자동: collectResults (결과 수집 + 통계 갱신)
+06:00 daily          collectFixtures        Cloud Functions     pull next 7 days of EPL fixtures
+12:00 daily          totolab-worker.timer   VPS systemd         re-analyze every match in next 24h
+09:00 daily          collectResults         Cloud Functions     mark won/lost on finished matches
+23:00 Sat & Sun      collectResultsSatNight Cloud Functions     pick up evening results same night
+                     collectResultsSunNight
 ```
 
-⚠️ 11:00 이후에 부상 데이터를 올리면 당일 자동 분석에 반영되지 않는다.
-그 경우 수동 재분석(`reanalyzeUpcomingManual`)을 따로 실행해야 한다.
+Worker re-analyzes the **same** match on each successive run as it
+approaches kickoff (e.g., a Saturday 16:00 KST match is analyzed at
+12:00 KST on Friday and again at 12:00 KST on Saturday). Each pass
+fetches fresh injury data via WebSearch through the ai-debate bridge,
+fresh odds from The Odds API, and fresh form/standings from
+football-data.org.
+
+There is no `analyzed: true` skip — every match in the 24h window is
+analyzed every run.
 
 ---
 
-## 주간 부상 데이터 업데이트
+## Where each piece runs
 
-### 1. premierinjuries.com에서 PDF 다운로드
-
-11:00 이전에 [premierinjuries.com/injury-table.php](https://www.premierinjuries.com/injury-table.php) 접속 → 페이지를 PDF로 저장.
-
-### 2. Claude Code 세션에 PDF 첨부
-
-Claude Code 세션에 PDF를 첨부하며 요청한다:
-
-> "부상 및 출전정지 상태 업데이트 하자"
-
-Claude가 PDF에서 20팀 데이터 추출 → `injuries-payload.json` 생성 → `main` 브랜치에 커밋/푸시.
-
-### 3. 푸시 후 자동 업로드 확인
-
-`injuries-payload.json`이 변경되어 main에 푸시되면 CI/CD가 자동으로 Firestore에 업로드한다.
-**별도 curl 명령 불필요.**
-
-GitHub → Actions 탭에서 최신 워크플로우 실행 결과 확인:
-- `Upload injuries to Firestore` step이 성공이면 완료
-- 로그에 `"ok":true,"updated":20` 확인
-
-### 3. 확인 (선택)
-
-- Firebase 콘솔 → Firestore → `injuries` 컬렉션에 20개 문서 있는지 확인
-- `updatedAt` 타임스탬프가 방금 시간인지 확인
-
-### 4. 자동 분석 대기
-
-12:00 KST에 `analyzeWeekday` 또는 `analyzeSaturday` 자동 실행 → 사이트에 값 픽 갱신됨.
+| Component | Location | Notes |
+|---|---|---|
+| Frontend | Firebase Hosting | static SPA in `index.html` |
+| Fixtures + results crons | Firebase Cloud Functions (asia-northeast3) | see `functions/index.js` |
+| Telegram notifier | Firebase Cloud Functions (Firestore trigger) | fires when `recommendations/current` changes |
+| Daily analysis | Contabo VPS via systemd timer | see `infra/systemd/totolab-worker.timer` |
+| AI bridge | Same VPS, `localhost:3000` | ai-debate spawns Claude Code CLI |
 
 ---
 
-## 수동 재분석 (선택)
+## Verifying it ran
 
-부상 데이터를 12:00 이후에 올렸거나 즉시 재분석하고 싶을 때:
+On the VPS:
 
-```powershell
-curl.exe https://asia-northeast3-toto-lab.cloudfunctions.net/reanalyzeUpcomingManual
+```bash
+# next firing
+systemctl list-timers | grep -i totolab
+
+# last run summary
+systemctl status totolab-worker.service
+
+# last run logs
+journalctl -u totolab-worker.service -n 100 --no-pager
 ```
 
-- 대상: 36시간 이내 `SCHEDULED`/`TIMED` 경기 전부 (이미 분석된 것도 덮어씀)
-- 비용: 경기당 약 $0.12 (주말 10경기 = ~$1.2)
+In Firebase Console:
+
+- Functions → logs for `collectFixtures`, `collectResults*`, `notifyTelegram`
+- Firestore → `recommendations/current` — `updatedAt` should be < 24h old
+- Firestore → `matches/{fixtureId}` — `analyzedAt` should be < 24h old for any match in the next 24h
 
 ---
 
-## 비용 예산
+## Manual triggers
 
-| 항목 | 빈도 | 회당 | 월간 |
+Worker (skip the schedule and run now):
+
+```bash
+# on the VPS
+sudo systemctl start totolab-worker.service
+journalctl -u totolab-worker.service -f
+```
+
+Wider analysis window for a one-off (e.g., re-analyze 48h):
+
+```bash
+cd /root/toto-lab/worker
+sudo node runOnce.js 48
+```
+
+Result collection (Cloud Functions, requires `ADMIN_TOKEN`):
+
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" \
+  https://asia-northeast3-toto-lab.cloudfunctions.net/collectResultsManual
+```
+
+---
+
+## Cost
+
+| Item | Frequency | Per run | Monthly |
 |---|---|---|---|
-| analyzeWeekday / analyzeSaturday | 경기 있는 날 | $0.10/경기 | ~$3~5 |
-| 부상 업데이트 (수동) | 주 1회 | $0 (chat 웹검색 무료) | $0 |
-| 총 | | | **~$5~8** |
+| Anthropic API | — | $0 (ai-debate spawns CLI under user subscription) | $0 |
+| Firebase Functions | per cron | within free tier | ~$0 |
+| Firestore | per write | within free tier | ~$0 |
+| football-data.org | per call | free tier | $0 |
+| The Odds API | per call | within paid tier already in use | — |
+| Contabo VPS | always-on | shared with ai-debate / my-life-os | ~$5/mo total |
 
-$100 한도 → **12~20개월** 지속 가능.
-
----
-
-## 트러블슈팅
-
-### CI/CD injuries 업로드 실패
-- GitHub Actions → 해당 워크플로우 → `Upload injuries to Firestore` step 로그 확인
-- `updated: N` 이 20보다 적으면 팀 이름 매칭 실패 → Firestore `injuries` 컬렉션에서 `teamName` 확인
-- 수동으로 업로드하려면:
-  ```powershell
-  curl.exe -X POST -H "Content-Type: application/json" --data "@injuries-payload.json" https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk
-  ```
-
-### `updateInjuriesBulk` 401/403 에러
-- football-data.org 토큰 만료 → Anthropic 콘솔에서 재발급 후 GitHub Secrets 업데이트 → 빈 커밋으로 재배포
-
-### `updated: N` 이 20보다 적음
-- 팀 이름 매칭 실패. Firestore `injuries` 컬렉션에서 `teamName` 필드 확인.
-- football-data.org 공식 이름 예: "Arsenal FC", "Manchester United FC", "AFC Bournemouth" (앞에 붙는 경우도 있음)
-
-### 12:00 분석이 안 돌아감
-- Firebase 콘솔 → Functions → `analyzeWeekday` 또는 `analyzeSaturday` 로그 확인
-- 스케줄러 상태: Cloud Scheduler 콘솔
-
-### 배포 실패 (CI)
-- GitHub Actions 로그 확인
-- `FIREBASE_TOKEN` / `ANTHROPIC_API_KEY` / `FOOTBALL_DATA_TOKEN` / `ODDS_API_KEY` 시크릿 확인
+Hard cost attributable to TotoLab: roughly the share of the VPS bill,
+under $5/month.
 
 ---
 
-## 주요 엔드포인트
+## Troubleshooting
 
-| URL | 용도 |
-|---|---|
-| `/updateInjuriesBulk` (POST) | 부상 JSON 수동 업로드 |
-| `/reanalyzeUpcomingManual` | 36시간 내 경기 강제 재분석 |
-| `/analyzeManual?fixtureId=X` | 특정 경기 수동 분석 |
-| `/collectResultsManual` | 종료된 경기 결과 수집 + 통계 갱신 |
+### Recommendations not refreshing
 
-베이스 URL: `https://asia-northeast3-toto-lab.cloudfunctions.net`
+Check the worker:
+
+```bash
+systemctl status totolab-worker.service
+journalctl -u totolab-worker.service -n 200 --no-pager
+```
+
+Common causes:
+- `ai-debate.service` not running → `systemctl status ai-debate`. It has
+  `Restart=always`, so a long downtime usually means a config error.
+- ai-debate hitting Claude Code rate limits (HTTP 429 in the logs). Pro
+  cap is ~45 messages per 5h. ~10 matches × 3 calls/match = 30 messages
+  per run, comfortably under the cap, but two runs back-to-back can
+  bunch up.
+- `FOOTBALL_DATA_TOKEN` or `ODDS_API_KEY` expired in `worker/.env`.
+
+### Analysis succeeded but no value picks shown on the site
+
+Picks are surfaced only when `edgeFair >= 5%` AND `confidence >= 50`
+(strong) or `confidence >= 40` (secondary). It's normal for a slate to
+produce zero picks; the site shows match cards regardless.
+
+### `collectFixtures` or `collectResults` cron didn't run
+
+- Firebase Console → Functions → logs. Cloud Scheduler retries on
+  failure within the same window.
+- football-data.org occasionally returns 429; the wrapper sleeps and
+  retries automatically. Persistent 429 means token issue.
+
+### Deploy failed
+
+GitHub Actions → latest workflow run on `main`. The deploy runs on a
+self-hosted runner on the VPS, so failures are usually:
+- VPS git pull conflict (manual `git status` on VPS)
+- `firebase deploy` auth (check `/root/.firebase_token` exists and is
+  valid)
 
 ---
 
-## 시즌 종료 시
+## Season end
 
-시즌 마지막 라운드 이후:
-- `matches` 컬렉션 그대로 유지 (과거 데이터 아카이브)
-- 새 시즌 시작 전에 `collectFixtures`가 새 일정 가져옴
-- `injuries` 컬렉션은 덮어쓰기 되므로 별도 초기화 불필요
+Nothing to do. After the final round:
+- `matches` collection stays as-is (historical data).
+- `collectFixtures` will start populating new-season fixtures
+  automatically when football-data.org publishes them.
+- `recommendations/current` stays on the last picks until the next
+  worker run finds new analyzed matches.

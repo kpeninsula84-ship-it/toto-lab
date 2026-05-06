@@ -13,40 +13,34 @@ AI-powered EPL betting analysis — value picks updated daily.
 
 **Target user:** EPL followers who place occasional bets and want a data edge without hours of research.
 
-**Problem:** Casual bettors rely on gut feel or mainstream tipsters, both of which ignore expected value. TotoLab calculates edge over bookmaker odds and only flags picks where the model's probability beats the implied probability by at least 5%.
+**Problem:** Casual bettors rely on gut feel or mainstream tipsters, both of which ignore expected value. TotoLab calculates edge over the de-vigged sharp book (Pinnacle / Smarkets / Betfair) and only flags picks where the model's probability beats the fair probability by at least 5%.
 
 ---
 
 ## Features
 
 ### AI Analysis
-- Claude Sonnet analyses every upcoming EPL fixture (~12–36 h before kickoff)
-- Factors in recent form, head-to-head, rest days, rotation risk, and injuries
-- Outputs 1X2 + Over/Under probabilities (line per match, e.g. 2.5 or 3.5), EV %, edge %, and a confidence score
+- Claude Sonnet analyses every EPL fixture inside the next 24h window, re-running daily so each pass picks up fresh injury, odds, and form data
+- Factors in recent form, head-to-head, rest days, rotation risk, and live-fetched injuries
+- Outputs 1X2 + Over/Under probabilities, EV %, edge % (vs. de-vigged sharp book), and a confidence score
+- Bilingual reasoning (English + Korean) on each match card
 
 ### Value Pick Engine
-- Filters picks by configurable thresholds (Edge ≥ 5%, Confidence ≥ 50)
-- Shows up to 3 picks per round with a calculated acca/singles recommendation
+- Filters by configurable thresholds (Edge ≥ 5% on fair price, Confidence ≥ 50)
+- Up to 3 strong picks plus a secondary tier (Confidence 40–49)
+- Acca odds calculated when ≥ 2 picks pass
 
 ### Track Record Dashboard
 - Win rate, P&L (£10 flat stake), and ROI tracked automatically
-- Breakdown by pick type (Home Win, Draw, Away Win, Over/Under)
+- Breakdown by pick type (Home Win, Draw, Away Win, Over, Under)
 
-### Injury & Suspension Tracking
-- Weekly manual upload via `updateInjuriesBulk` endpoint
-- Injury data injected into Claude prompts for context-aware analysis
+### Telegram Alerts
+- Push notification when a new set of value picks is published (Firestore trigger)
 
 ### Automated Pipeline
-- `collectFixtures` — daily fixture sync from football-data.org
-- `analyzeWeekday` — Mon–Fri 12:00 KST, covers next 24 h
-- `analyzeSaturday` — Sat 12:00 KST, covers next 48 h (Sat evening + all of Sun)
-- `collectResults` — daily 09:00 KST, post-match result collection + stats update
-
----
-
-## Screenshots
-
-> Coming soon.
+- `collectFixtures` — daily 06:00 KST, pulls next 7 days from football-data.org
+- `totolab-worker.timer` — daily 12:00 KST on the VPS, re-analyzes every match in the next 24h
+- `collectResults` — daily 09:00 KST + same-night Sat/Sun 23:00 KST, reconciles finished matches
 
 ---
 
@@ -57,7 +51,8 @@ AI-powered EPL betting analysis — value picks updated daily.
 - Node.js 22+
 - Firebase CLI: `npm install -g firebase-tools`
 - A Firebase project with Firestore and Hosting enabled
-- API keys: `ANTHROPIC_API_KEY`, `FOOTBALL_DATA_TOKEN`, `ODDS_API_KEY`
+- API keys: `FOOTBALL_DATA_TOKEN`, `ODDS_API_KEY`
+- A host running [ai-debate](https://github.com/.../ai-debate) on `localhost:3000` (the worker calls it for AI analysis — Claude Code CLI under the user's subscription, so no Anthropic API key required)
 
 ### Install and run locally
 
@@ -66,16 +61,28 @@ AI-powered EPL betting analysis — value picks updated daily.
 git clone https://github.com/kpeninsula84-ship-it/toto-lab.git
 cd toto-lab
 
-# Install function dependencies
+# Install Cloud Functions deps
 cd functions && npm install && cd ..
 
-# Create functions/.env with your API keys:
-# ANTHROPIC_API_KEY=...
+# Install worker deps
+cd worker && npm install && cd ..
+
+# functions/.env
+# FOOTBALL_DATA_TOKEN=...
+# ADMIN_TOKEN=...
+
+# worker/.env
 # FOOTBALL_DATA_TOKEN=...
 # ODDS_API_KEY=...
+# AI_DEBATE_URL=http://localhost:3000
 
-# Run Firebase emulators
+# Local emulators (Functions + Firestore)
 firebase emulators:start
+
+# One-shot worker run (analysis only)
+cd worker
+node runOnce.js          # default 24h window
+node runOnce.js 48       # one-off wider sweep
 ```
 
 ### Deploy
@@ -84,42 +91,17 @@ firebase emulators:start
 firebase deploy
 ```
 
+Worker runs on a VPS, not Cloud Functions. See [`infra/README.md`](infra/README.md) for the systemd unit + deploy script.
+
 ### Manual operations
 
-All manual HTTP triggers require an `x-admin-token` header matching the `ADMIN_TOKEN`
-env var set on the deployed functions.
+All HTTP triggers require an `x-admin-token` header matching the `ADMIN_TOKEN` env var on the deployed Functions.
 
 ```bash
-# Force re-analysis of upcoming fixtures (within 36 h)
+# Force result collection
 curl -H "x-admin-token: $ADMIN_TOKEN" \
-  https://asia-northeast3-toto-lab.cloudfunctions.net/reanalyzeUpcomingManual
-
-# Upload injury data
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -H "x-admin-token: $ADMIN_TOKEN" \
-  --data "@injuries-payload.json" \
-  https://asia-northeast3-toto-lab.cloudfunctions.net/updateInjuriesBulk
+  https://asia-northeast3-toto-lab.cloudfunctions.net/collectResultsManual
 ```
-
----
-
-## Roadmap
-
-```
-Phase 1 ✅                  Phase 2 🔄                  Phase 3 🔲
-──────────────────          ──────────────────          ──────────────────
-✅ EPL fixture analysis     🔄 Multi-league support      🔲 User accounts
-✅ Value pick engine        🔲 Telegram/email alerts     🔲 Custom thresholds
-✅ Track record stats       🔲 Historical pick archive   🔲 Mobile PWA
-✅ Injury data pipeline     🔲 Confidence calibration    🔲 Home screen widget
-```
-
-| Phase | Status | Target |
-|---|---|---|
-| Phase 1 — Core EPL analysis | Complete | 2025 Q4 |
-| Phase 2 — Alerts & history | In progress | 2026 Q2 |
-| Phase 3 — User features | Planned | 2026 Q3 |
 
 ---
 
@@ -129,29 +111,55 @@ Phase 1 ✅                  Phase 2 🔄                  Phase 3 🔲
 graph TD
     User["Browser (Tailwind SPA)"] -->|reads| FS[(Firestore)]
 
-    subgraph Firebase Functions
+    subgraph "Cloud Functions"
         CF[collectFixtures] -->|writes matches| FS
-        AW[analyzeWeekday / analyzeSaturday] -->|reads matches + injuries| FS
-        AW -->|writes analysis + picks| FS
-        CR[collectResults] -->|updates results + stats| FS
-        UIB[updateInjuriesBulk] -->|writes injuries| FS
+        CR[collectResults x3 cron] -->|results + stats| FS
+        TG[notifyTelegram] -.->|trigger on recommendations/current| TGAPI((Telegram))
     end
 
-    AW -->|prompt| Claude["Claude Sonnet (Anthropic API)"]
-    Claude -->|JSON analysis| AW
+    subgraph "VPS (Contabo)"
+        Timer[totolab-worker.timer<br/>12:00 KST daily] --> Worker
+        Worker[worker/runOnce.js] -->|HTTP| AID[ai-debate localhost:3000]
+        Worker -->|analyses + recommendations| FS
+    end
+
+    AID -->|spawns| CCLI["Claude Code CLI<br/>(user subscription)"]
 
     CF -->|fixtures| FD["football-data.org"]
-    AW -->|odds| OA["The Odds API"]
+    CR -->|results| FD
+    Worker -->|odds| OA["The Odds API"]
+    Worker -->|recent / standings / H2H| FD
 ```
 
 | Layer | Role |
 |---|---|
-| Firebase Hosting | Static SPA (index.html + Tailwind CDN) |
-| Firestore | Matches, picks, stats, injuries |
-| Firebase Functions | Scheduled jobs + HTTP endpoints |
-| Claude Sonnet | Per-fixture AI analysis |
-| football-data.org | Fixtures, results, standings, H2H |
-| The Odds API | Live bookmaker odds |
+| Firebase Hosting | Static SPA (`index.html` + Tailwind CDN) |
+| Firestore | Matches, picks, stats, recommendations |
+| Cloud Functions | Fixture cron, result cron, Telegram notifier |
+| VPS systemd | Daily AI analysis (24h window) |
+| ai-debate bridge | Claude Code CLI under user subscription |
+| football-data.org | Fixtures, results, standings, recent matches, H2H |
+| The Odds API | Live bookmaker odds (1X2 + totals) |
+
+---
+
+## Roadmap
+
+```
+Phase 1 ✅                  Phase 2 🔄                  Phase 3 🔲
+──────────────────          ──────────────────          ──────────────────
+✅ EPL fixture analysis     ✅ Telegram alerts           🔲 User accounts
+✅ Value pick engine        🔄 Historical pick archive   🔲 Custom thresholds
+✅ Track record stats       🔲 Multi-league support      🔲 Mobile PWA
+✅ De-vigged fair edge      🔲 Confidence calibration    🔲 Home screen widget
+✅ Bilingual reasoning      🔲 Per-run failure alert
+```
+
+| Phase | Status | Target |
+|---|---|---|
+| Phase 1 — Core EPL analysis | Complete | 2025 Q4 |
+| Phase 2 — Alerts & history | In progress | 2026 Q2 |
+| Phase 3 — User features | Planned | 2026 Q3 |
 
 ---
 

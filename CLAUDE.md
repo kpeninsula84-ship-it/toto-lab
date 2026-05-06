@@ -43,7 +43,6 @@ Tone: concise and confident, no excessive promotional language.
 ## Commit rules
 
 - Format: `type: description (closes #number)`
-- Never commit directly to the main branch.
 - Types:
   - `feat`: new feature
   - `fix`: bug fix
@@ -53,16 +52,16 @@ Tone: concise and confident, no excessive promotional language.
   - `fix: fix streak bug (closes #38)`
   - `feat: add category feature (closes #51)`
 
-## Never do
-
-- Never commit directly to main.
-- Never merge without a PR.
-
 ---
 
 ## Project overview
 
-TotoLab is a single-page web app that uses Claude Sonnet to analyse every upcoming EPL fixture and surface value bets. Firebase Functions run on a schedule to collect fixtures, request odds, inject injury data, call the Claude API, and write structured analysis back to Firestore. The frontend reads Firestore directly and renders picks, match cards, and a track-record dashboard.
+TotoLab is a single-page web app that surfaces value bets on upcoming
+EPL fixtures. The analysis pipeline runs on a VPS via systemd, calls
+Claude through the [ai-debate](https://github.com/.../ai-debate) bridge
+(Claude Code CLI under the user's subscription, $0 in API spend), and
+writes structured analysis to Firestore. The frontend reads Firestore
+directly and renders picks, match cards, and a track-record dashboard.
 
 ## Folder structure
 
@@ -73,39 +72,67 @@ toto-lab/
 ├── firestore.rules          # Security rules (public read, server-only write)
 ├── firestore.indexes.json   # Composite indexes
 ├── CLAUDE.md
-├── OPERATIONS.md            # Weekly manual injury-update runbook (Korean)
+├── OPERATIONS.md            # Day-to-day runbook (Korean)
+├── README.md
 ├── ideas/                   # Feature idea drafts
-└── functions/
-    ├── index.js             # All Cloud Function exports
-    ├── analyzer.js          # Claude API call + prompt construction
-    ├── footballData.js      # football-data.org API wrapper
-    ├── oddsApi.js           # The Odds API wrapper
-    └── package.json
+├── infra/                   # systemd units + deploy.sh (VPS-side, mirrored to git)
+│   ├── systemd/
+│   │   ├── totolab-worker.timer
+│   │   ├── totolab-worker.service
+│   │   └── ai-debate.service
+│   ├── deploy.sh
+│   └── README.md
+├── functions/               # Cloud Functions — fixtures, results, Telegram notifier
+│   ├── index.js
+│   ├── footballData.js      # football-data.org API wrapper
+│   ├── oddsApi.js           # The Odds API wrapper (also used by worker)
+│   └── devig.js             # de-vig math (also used by worker)
+└── worker/                  # VPS analysis runner
+    ├── runOnce.js           # systemd entrypoint
+    ├── pipeline.js          # orchestrates fan-out + recommendations
+    ├── analyzer.js          # ai-debate /api/analyze wrapper
+    └── firestore.js         # Firebase Admin SDK init
 ```
+
+## Where things run
+
+| Job | Where | Trigger |
+|---|---|---|
+| Fixture collection (next 7 days) | Cloud Functions | cron 06:00 KST daily |
+| Result collection | Cloud Functions | cron 09:00 KST daily + 23:00 Sat/Sun |
+| Match analysis (next 24h) | VPS worker (systemd) | timer 12:00 KST daily |
+| Telegram alert on new picks | Cloud Functions | Firestore trigger on `recommendations/current` |
+| Static site | Firebase Hosting | git push → CI |
 
 ## Build and run
 
 ```bash
-# Install function dependencies
+# Functions (local emulation, deploy)
 cd functions && npm install && cd ..
-
-# Local emulation (functions + firestore)
 firebase emulators:start
-
-# Deploy everything
 firebase deploy
-
-# Deploy functions only
 firebase deploy --only functions
-
-# Deploy hosting only
 firebase deploy --only hosting
+
+# Worker (manual run on the VPS)
+cd worker && npm install
+node runOnce.js          # default 24h window
+node runOnce.js 48       # override window for one-off
 ```
 
-Required environment variables in `functions/.env` (local) or GitHub Secrets (CI):
-- `ANTHROPIC_API_KEY`
-- `FOOTBALL_DATA_TOKEN`
-- `ODDS_API_KEY`
+Required environment variables:
+
+| Var | Where | Used by |
+|---|---|---|
+| `FOOTBALL_DATA_TOKEN` | `functions/.env`, `worker/.env` | both |
+| `ODDS_API_KEY` | `worker/.env` | worker |
+| `ADMIN_TOKEN` | `functions/.env` | manual HTTP endpoints |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Functions runtime config | notifier |
+| `AI_DEBATE_URL` (default `http://localhost:3000`) | systemd unit | worker |
+| `AI_DEBATE_MODEL` (default `claude-sonnet-4-6`) | systemd unit | worker |
+| `GOOGLE_APPLICATION_CREDENTIALS` | systemd unit | worker (Firestore Admin) |
+
+No Anthropic API key — the worker reaches Claude through ai-debate.
 
 ## Screens
 
@@ -114,50 +141,70 @@ Single-page app (`index.html`):
 | Section | Description |
 |---|---|
 | Value Picks | Top recommendations for the current round (EV, edge, odds, acca) |
-| All Analysed Fixtures | Match cards with 1X2 + O/U probabilities, confidence badge, reasoning bullets |
+| All Analysed Fixtures | Match cards with 1X2 + O/U probabilities, confidence badge, reasoning bullets (EN + KR) |
 | Track Record | Hit rate, P&L (£10 flat stake), ROI, breakdown by pick type |
 
 ## Tech stack
 
-| Layer | Technology | Version |
-|---|---|---|
-| Frontend | Vanilla JS + Tailwind CSS (CDN) | Tailwind 3 |
-| Hosting | Firebase Hosting | — |
-| Database | Firestore | — |
-| Backend | Firebase Functions (Node.js ESM) | Node 22 |
-| AI | Anthropic Claude Sonnet via `@anthropic-ai/sdk` | ^0.40.0 |
-| Data — Fixtures | football-data.org API | v4 |
-| Data — Odds | The Odds API | v4 |
-| CI/CD | GitHub Actions | — |
+| Layer | Technology |
+|---|---|
+| Frontend | Vanilla JS + Tailwind CSS (CDN) |
+| Hosting | Firebase Hosting |
+| Database | Firestore |
+| Cloud jobs | Firebase Functions (Node 22, ESM) |
+| Analysis runtime | Node 22 on Contabo VPS via systemd |
+| AI | Claude Sonnet 4.6 via ai-debate bridge (Claude Code CLI) |
+| Data — Fixtures | football-data.org API v4 |
+| Data — Odds | The Odds API v4 |
+| CI/CD | GitHub Actions self-hosted runner on the VPS |
 
 ## Key conventions
 
-- All Cloud Functions are in `functions/index.js`; business logic lives in the adjacent modules.
-- Functions use ESM (`"type": "module"` in package.json).
-- Pick thresholds are constants at the top of `index.js`: `EDGE_THRESHOLD`, `CONFIDENCE_THRESHOLD`, `MAX_PICKS`.
-- Injury data is stored in Firestore `injuries/{teamId}` and fetched inside `analyzer.js` before building the Claude prompt.
-- `ARSENAL_TEAM_ID = 57` is the hardcoded fan-team flag — set `isFanTeam: true` on Arsenal matches so the prompt enforces strict data-only reasoning.
-- Firestore `stats/summary` is the single document for all aggregate pick stats; `stats/visits` is the visitor counter (client-writable).
-- `recommendations/current` holds the active round's picks; overwritten each analysis run.
-- All monetary values stored in pence (integers) and displayed divided by 100.
-- O/U line is determined per match by selecting the most balanced (smallest over/under price gap) totals line from the bookmaker. Stored as `overUnder: { line, over, under }` in odds and `ouLine` on the match doc. Pick types are `over` / `under` (legacy docs may have `over25` / `under25`).
-- `analyzer.js` uses `buildSystemPrompt(ouLine)` to inject the actual line into the Claude prompt dynamically.
-- All Analysed Fixtures on the frontend shows upcoming matches (kickoff ≥ now, up to 4 days ahead) first in ascending order, followed by recently finished matches (kickoff within the last 24 h) in descending order.
+- Worker is **analysis only**. Fixture/result collection lives in Cloud
+  Functions to keep them on free, always-on infrastructure.
+- Worker re-analyzes every match in the 24h window on every run — there
+  is no `analyzed: true` skip filter. This keeps injury, odds, and form
+  data fresh as kickoff approaches.
+- Pick thresholds live in `worker/pipeline.js`: `EDGE_THRESHOLD = 5`,
+  `CONFIDENCE_THRESHOLD = 50`, `SECONDARY_CONFIDENCE_MIN = 40`,
+  `MAX_PICKS = 3`.
+- Injury data is fetched live by `worker/analyzer.js#fetchTeamInjuries`
+  via WebSearch through the ai-debate bridge — no pre-uploaded
+  Firestore collection is read.
+- `ARSENAL_TEAM_ID = 57` (in `worker/pipeline.js`) is the hardcoded
+  fan-team flag — sets `isFanTeam: true` on Arsenal matches so the
+  prompt enforces strict data-only reasoning.
+- `recommendations/current` holds the active round's picks; overwritten
+  on every analysis run.
+- `stats/summary` aggregates won/lost/ROI; updated by `collectResults`.
+- O/U line per match is the most balanced totals line (smallest
+  over/under price gap) from the bookmaker. Stored as
+  `overUnder: { line, over, under }` in odds and `ouLine` on the match
+  doc. Pick types are `over` / `under` (legacy docs may have
+  `over25` / `under25`).
+- Edge is computed against the de-vigged sharp book (Pinnacle / Smarkets
+  / Betfair) via `computeFairProbs` — Power method for 1X2, Shin method
+  for O/U.
+- All Analysed Fixtures on the frontend shows upcoming matches
+  (kickoff ≥ now, up to 4 days ahead) ascending, then recently finished
+  matches (kickoff within last 24h) descending.
 
-## Known issues
+## Operational gotchas
 
-| Issue | Detail |
-|---|---|
-| Injury team name mismatch | `updateInjuriesBulk` may match fewer than 20 teams if football-data.org uses suffixed names ("Arsenal FC" vs "Arsenal") |
-| No result auto-detection | `collectResults` only runs Sunday 09:00 KST — late Saturday results not picked up until then |
+- Worker depends on `ai-debate.service` being up. The systemd unit uses
+  `Wants=ai-debate.service` (soft) intentionally — see
+  [`infra/README.md`](infra/README.md) for why this matters.
+- `Persistent=true` on the timer means a missed firing (e.g., VPS
+  reboot) runs immediately on next start. Usually fine.
+- Cloud Functions `collectResults` skips already-recorded matches; the
+  worker does not look at result data at all.
 
 ## Future features
 
 ### Must do
-- [ ] Telegram / email alert when new value picks are published
-- [ ] Historical pick archive (past rounds browsable on frontend)
+- Per-run failure alert via Telegram (`OnFailure=` systemd handler)
 
 ### Nice to have
-- [ ] Multi-league support (La Liga, Bundesliga)
-- [ ] Confidence calibration chart (predicted vs actual win rate by confidence band)
-- [ ] User accounts with custom edge/confidence thresholds
+- Multi-league support (La Liga, Bundesliga)
+- Confidence calibration chart (predicted vs actual win rate by band)
+- User accounts with custom edge/confidence thresholds
