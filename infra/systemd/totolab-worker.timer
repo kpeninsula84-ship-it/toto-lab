@@ -1,0 +1,12 @@
+[Unit]
+Description=Run TotoLab worker daily at 12:00 KST (= 03:00 UTC)
+Requires=totolab-worker.service
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=totolab-worker.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,23 @@
+# Reference copy. Canonical owner is the ai-debate repo. Kept here so
+# anyone reading toto-lab can see the full runtime stack on the VPS in
+# one place. If this drifts from /etc/systemd/system/ai-debate.service,
+# the VPS copy wins.
+
+[Unit]
+Description=AI Debate server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ai-debate
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm run serve
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
