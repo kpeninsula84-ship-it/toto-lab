@@ -326,11 +326,34 @@ export const collectResultsManual = onRequest(
 // deliberately — Betman may reject non-KR source IPs, which rules out
 // the GitHub Actions worker.
 async function runCollectBetmanOdds() {
-  const { fixtures, diagnostics } = await getBetmanEplOdds();
+  let fixtures, diagnostics;
+  try {
+    ({ fixtures, diagnostics } = await getBetmanEplOdds());
+  } catch (err) {
+    // Publicly-readable heartbeat (stats/betman) so Betman access health
+    // is observable without Functions-log access — KR-IP geo behaviour
+    // in particular.
+    await db.collection("stats").doc("betman").set({
+      updatedAt: Timestamp.now(),
+      ok: false,
+      error: String(err.message).slice(0, 300),
+    });
+    throw err;
+  }
   console.log(
     `[betman] rounds=${diagnostics.rounds.join(",") || "none"} eplFixtures=${fixtures.length} soccerLeagues=${diagnostics.soccerLeagues.join("|") || "none"}`
   );
-  if (!fixtures.length) return { matched: 0, total: 0, rounds: diagnostics.rounds };
+  const heartbeat = {
+    updatedAt: Timestamp.now(),
+    ok: true,
+    rounds: diagnostics.rounds,
+    soccerLeagues: diagnostics.soccerLeagues,
+    eplFixtures: fixtures.length,
+  };
+  if (!fixtures.length) {
+    await db.collection("stats").doc("betman").set({ ...heartbeat, matched: 0 });
+    return { matched: 0, total: 0, rounds: diagnostics.rounds };
+  }
 
   const now = Date.now();
   const snap = await db
@@ -368,13 +391,16 @@ async function runCollectBetmanOdds() {
     }
   }
   console.log(`[betman] matched ${matched}/${fixtures.length} Betman EPL fixtures to match docs`);
+  await db.collection("stats").doc("betman").set({ ...heartbeat, matched });
   return { matched, total: fixtures.length, rounds: diagnostics.rounds };
 }
 
 // Daily 11:30 KST — 30 min before the analysis worker, so picks can carry
 // Betman prices and deadlines.
+// TEMP: running every 10 min to validate Betman access from the Seoul
+// GCF egress IP; revert to "30 11 * * *" once stats/betman shows ok.
 export const collectBetmanOdds = onSchedule(
-  { schedule: "30 11 * * *", timeZone: "Asia/Seoul", timeoutSeconds: 120 },
+  { schedule: "*/10 * * * *", timeZone: "Asia/Seoul", timeoutSeconds: 120 },
   runCollectBetmanOdds
 );
 
