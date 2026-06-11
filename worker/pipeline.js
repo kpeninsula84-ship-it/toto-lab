@@ -61,7 +61,7 @@ function getFairProbForPick(match) {
   return null;
 }
 
-function computeFairProbs(odds) {
+export function computeFairProbs(odds) {
   if (!odds) return null;
   const sharpMW = odds.fair?.matchWinner ?? odds.market?.matchWinner ?? odds.matchWinner ?? null;
   const out = {};

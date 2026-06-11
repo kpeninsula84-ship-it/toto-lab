@@ -63,6 +63,43 @@ function resultLabel(won) {
   return won ? "won" : "lost";
 }
 
+// Closing price + de-vigged closing fair prob for the pick, from the
+// `closingOdds` snapshot the worker captures shortly before kickoff.
+// O/U values only count when the closing line matches the pick's line.
+function closingForPick(m) {
+  const c = m.closingOdds;
+  if (!c || !m.pick) return { price: null, fairProb: null };
+  if (m.pick === "home" || m.pick === "draw" || m.pick === "away") {
+    return {
+      price: c.matchWinner?.[m.pick] ?? null,
+      fairProb: c.fair?.matchWinner?.[m.pick] ?? null,
+    };
+  }
+  if (m.pick === "over" || m.pick === "under") {
+    const line = m.ouLine ?? null;
+    return {
+      price: line != null && c.overUnder?.line === line ? c.overUnder[m.pick] ?? null : null,
+      fairProb:
+        line != null && c.fair?.overUnder?.line === line ? c.fair.overUnder[m.pick] ?? null : null,
+    };
+  }
+  return { price: null, fairProb: null };
+}
+
+// CLV (%) = taken price vs closing price; evClose (%) = EV of the taken
+// price measured against the de-vigged closing probability. Positive
+// values mean we beat the close — the strongest small-sample signal
+// that the engine adds value.
+function computeClvFields(m) {
+  const pickOdds = getOddsForPick(m);
+  if (!m.pick || !pickOdds) return null;
+  const { price, fairProb } = closingForPick(m);
+  const out = {};
+  if (price) out.clv = Math.round((pickOdds / price - 1) * 1000) / 10;
+  if (fairProb) out.evClose = Math.round((pickOdds * fairProb - 1) * 1000) / 10;
+  return Object.keys(out).length ? out : null;
+}
+
 async function computeAndSaveStats() {
   const snap = await db
     .collection("matches")
@@ -73,11 +110,17 @@ async function computeAndSaveStats() {
   let wins = 0;
   let pushes = 0;
   let totalProfit = 0;
+  let clvSum = 0;
+  let clvCount = 0;
   const byPickType = {};
 
   for (const doc of snap.docs) {
     const m = doc.data();
     if (!m.pick) continue;
+    if (typeof m.clv === "number") {
+      clvSum += m.clv;
+      clvCount++;
+    }
     // Pushes return the stake: counted separately, excluded from win
     // rate and P&L (which cover decided bets only).
     if (m.result === "push") {
@@ -115,6 +158,8 @@ async function computeAndSaveStats() {
       totalStake > 0
         ? Math.round((totalProfit / totalStake) * 1000) / 10
         : 0,
+    avgClv: clvCount > 0 ? Math.round((clvSum / clvCount) * 10) / 10 : null,
+    clvCount,
     byPickType,
   };
 
@@ -199,13 +244,16 @@ async function runCollectResults() {
     if (m.result) continue; // already recorded
 
     const won = didPickWin(m.pick, f.score, m.ouLine);
-    await ref.update({
+    const update = {
       finalScore: f.score,
       actualWinner: f.winner,
       result: resultLabel(won),
       resultRecordedAt: Timestamp.now(),
       status: "FINISHED",
-    });
+    };
+    const clvFields = computeClvFields(m);
+    if (clvFields) Object.assign(update, clvFields);
+    await ref.update(update);
     updated++;
   }
 
