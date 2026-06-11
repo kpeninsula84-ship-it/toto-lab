@@ -37,6 +37,8 @@ Tone: concise and confident, no excessive promotional language.
 
 ## Branch rules
 
+- Pushing directly to `main` is allowed (solo project, no PR review
+  required). Use a branch only when the work benefits from one.
 - New feature: `feature/#issue-number-short-description`
 - Bug fix: `fix/#issue-number-short-description`
 
