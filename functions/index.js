@@ -39,34 +39,51 @@ function getOddsForPick(match) {
   return null;
 }
 
+// Returns true/false for win/loss, "push" when an O/U total lands exactly
+// on a whole-number line (stake returned — neither won nor lost), or null
+// when there is no settleable pick.
 function didPickWin(pick, score, ouLine) {
   if (!pick || score?.home == null || score?.away == null) return null;
   const total = score.home + score.away;
   if (pick === "home") return score.home > score.away;
   if (pick === "draw") return score.home === score.away;
   if (pick === "away") return score.away > score.home;
-  if (pick === "over") return total > (ouLine ?? 2.5);
-  if (pick === "under") return total < (ouLine ?? 2.5);
-  // fallback for legacy picks stored as over25/under25
-  if (pick === "over25") return total > 2.5;
-  if (pick === "under25") return total < 2.5;
+  if (pick === "over" || pick === "under" || pick === "over25" || pick === "under25") {
+    // over25/under25 are legacy picks with an implicit 2.5 line
+    const line = pick.endsWith("25") ? 2.5 : (ouLine ?? 2.5);
+    if (total === line) return "push";
+    return pick.startsWith("over") ? total > line : total < line;
+  }
   return null;
+}
+
+function resultLabel(won) {
+  if (won === null) return "no_bet";
+  if (won === "push") return "push";
+  return won ? "won" : "lost";
 }
 
 async function computeAndSaveStats() {
   const snap = await db
     .collection("matches")
-    .where("result", "in", ["won", "lost"])
+    .where("result", "in", ["won", "lost", "push"])
     .get();
 
   let totalPicks = 0;
   let wins = 0;
+  let pushes = 0;
   let totalProfit = 0;
   const byPickType = {};
 
   for (const doc of snap.docs) {
     const m = doc.data();
     if (!m.pick) continue;
+    // Pushes return the stake: counted separately, excluded from win
+    // rate and P&L (which cover decided bets only).
+    if (m.result === "push") {
+      pushes++;
+      continue;
+    }
     const pickOdds = getOddsForPick(m);
     if (!pickOdds) continue;
 
@@ -89,6 +106,7 @@ async function computeAndSaveStats() {
     totalPicks,
     wins,
     losses: totalPicks - wins,
+    pushes,
     winRate:
       totalPicks > 0 ? Math.round((wins / totalPicks) * 1000) / 10 : 0,
     totalStake,
@@ -184,7 +202,7 @@ async function runCollectResults() {
     await ref.update({
       finalScore: f.score,
       actualWinner: f.winner,
-      result: won === null ? "no_bet" : won ? "won" : "lost",
+      result: resultLabel(won),
       resultRecordedAt: Timestamp.now(),
       status: "FINISHED",
     });
@@ -192,7 +210,8 @@ async function runCollectResults() {
   }
 
   console.log(`[results] updated ${updated} match docs`);
-  await computeAndSaveStats();
+  const stats = await computeAndSaveStats();
+  return { fetched: finished.length, updated, stats };
 }
 
 // Daily 09:00 KST
@@ -219,31 +238,8 @@ export const collectResultsManual = onRequest(
   async (req, res) => {
     if (!requireAdmin(req, res)) return;
     try {
-      const now = new Date();
-      const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
-      const dateFrom = threeDaysAgo.toISOString().split("T")[0];
-      const dateTo = now.toISOString().split("T")[0];
-
-      const finished = await getFinishedMatches({ dateFrom, dateTo });
-      let updated = 0;
-      for (const f of finished) {
-        const ref = db.collection("matches").doc(String(f.fixtureId));
-        const snap = await ref.get();
-        if (!snap.exists) continue;
-        const m = snap.data();
-        if (m.result) continue;
-        const won = didPickWin(m.pick, f.score, m.ouLine);
-        await ref.update({
-          finalScore: f.score,
-          actualWinner: f.winner,
-          result: won === null ? "no_bet" : won ? "won" : "lost",
-          resultRecordedAt: Timestamp.now(),
-          status: "FINISHED",
-        });
-        updated++;
-      }
-      const stats = await computeAndSaveStats();
-      res.json({ ok: true, fetched: finished.length, updated, stats });
+      const summary = await runCollectResults();
+      res.json({ ok: true, ...summary });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });

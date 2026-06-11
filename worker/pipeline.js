@@ -129,7 +129,19 @@ async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
       ? Math.round((pickProb - fairProb * 100) * 10) / 10
       : null;
 
-  return { ...analysis, fairProbs, fairSource, edgeFair, injuriesSnapshot };
+  const result = { ...analysis, fairProbs, fairSource, edgeFair, injuriesSnapshot };
+
+  // A pick we can't price can't be staked or settled — last season three
+  // picks were graded with no stored odds, corrupting the track record.
+  if (result.pick && getOddsForPick(result) == null) {
+    console.log(
+      `[pipeline] ${match.home} vs ${match.away}: dropping pick "${result.pick}" — no stored odds for it`
+    );
+    result.pick = null;
+    result.pickDropped = "no_stored_odds";
+  }
+
+  return result;
 }
 
 // main entry — analyze every SCHEDULED/TIMED match in the next horizon -------
@@ -150,6 +162,9 @@ export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS,
 
   if (!upcoming.length) {
     console.log(`[${label}] no upcoming EPL matches in next ${horizonHours}h`);
+    // Still refresh recommendations/current — otherwise the site keeps
+    // showing the previous round's picks indefinitely (e.g. all off-season).
+    await computeAndSaveRecommendations();
     return;
   }
 
