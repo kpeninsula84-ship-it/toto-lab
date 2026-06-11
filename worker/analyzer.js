@@ -25,6 +25,7 @@ export const MAX_MW_DELTA = 7; // per 1X2 outcome
 export const MAX_OU_DELTA = 6; // on the Over side (Under mirrors)
 export const DRAW_FLOOR_SLACK = 2; // draw may end at most 2pp below market
 const BIG_DELTA = 5; // |delta| >= BIG_DELTA demands strong evidence/confidence
+export const ENSEMBLE_DISAGREE_PP = 3; // sample gap that triggers a tiebreak run
 
 // ── Claude CLI transport ─────────────────────────────────────────────────────
 
@@ -241,6 +242,26 @@ export function applyMarketAnchoredDeltas(fairProbs, rawDeltas = {}) {
   return out;
 }
 
+// Largest per-key gap between two delta samples — LLM sampling noise
+// detector. A big gap means the evidence doesn't pin the answer down.
+export function maxDeltaGap(a, b) {
+  return Math.max(
+    ...["home", "draw", "away", "over"].map((k) => Math.abs((a?.[k] ?? 0) - (b?.[k] ?? 0)))
+  );
+}
+
+// Per-key median across delta samples (median of 2 = mean). Sum-zero is
+// re-asserted later by sanitizeDeltas inside applyMarketAnchoredDeltas.
+export function medianDeltas(samples) {
+  const out = {};
+  for (const k of ["home", "draw", "away", "over"]) {
+    const vals = samples.map((s) => s?.[k] ?? 0).sort((x, y) => x - y);
+    const mid = Math.floor(vals.length / 2);
+    out[k] = vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+  }
+  return out;
+}
+
 function validateV2(prediction) {
   if (!prediction || typeof prediction !== "object") {
     throw new Error("v2 output is not an object");
@@ -407,6 +428,65 @@ ${d.away}: ${JSON.stringify(d.awayUpcoming)}
 Return JSON only.`;
 }
 
+// ── Skeptic verification pass ────────────────────────────────────────────────
+
+const SKEPTIC_SYSTEM_PROMPT = `You are a skeptical auditor at a sports betting desk. A junior analyst proposes probability adjustments (deltas, percentage points) against the de-vigged sharp-market baseline for an EPL match. Sharp books price public information within minutes; most proposed edges are mirages — last season, the desk's boldest market disagreements were its worst bets.
+
+REFUTE the proposal unless ALL of the following hold:
+1. The cited evidence is SPECIFIC — named players or events, not narratives ("momentum", "fatigue" without numbers, "they always struggle here").
+2. It is RECENT — from roughly the last 24-48 hours (report ages are included in the injury data).
+3. It is plausibly NOT YET FULLY PRICED — late-breaking, ambiguous, or under-reported.
+Long-known absences, form, table position, H2H, and generic rotation talk are ALREADY priced — a proposal resting on them must be refuted.
+Default to refute when uncertain.
+
+Output STRICT JSON: {"verdict":"uphold"|"refute","confidence":int,"note":"one short sentence"}
+confidence = your own 0-100 rating of the evidence strength if upheld (ignored on refute). No markdown, no extra prose.`;
+
+function buildSkepticUserPrompt(data, deltas, keyFactors, reasoning) {
+  return `Match: ${data.home} (home) vs ${data.away} (away)
+Kickoff: ${data.kickoff} (in ${data.hoursToKickoff}h)
+
+${buildBaselineSection(data)}
+
+=== PROPOSED DELTAS (pp vs baseline) ===
+${JSON.stringify(deltas)}
+
+=== ANALYST'S CITED EVIDENCE ===
+keyFactors: ${JSON.stringify(keyFactors)}
+reasoning: ${JSON.stringify(reasoning)}
+
+=== ${data.home} — INJURY DATA (with report ages) ===
+${fmtInjuries(data.homeInjuries)}
+
+=== ${data.away} — INJURY DATA (with report ages) ===
+${fmtInjuries(data.awayInjuries)}
+
+Audit the proposal. Return JSON only.`;
+}
+
+// Refute-by-default audit of non-zero deltas. Infrastructure errors keep
+// the proposal (flagged) — the verifier exists to kill weak evidence,
+// not to fail runs.
+async function skepticVerify(data, deltas, keyFactors, reasoning) {
+  try {
+    const { data: verdict, usage } = await claudeAnalyze({
+      systemPrompt: SKEPTIC_SYSTEM_PROMPT,
+      userPrompt: buildSkepticUserPrompt(data, deltas, keyFactors, reasoning),
+    });
+    if (verdict?.verdict === "refute" || verdict?.verdict === "uphold") {
+      return {
+        verdict: verdict.verdict,
+        note: typeof verdict.note === "string" ? verdict.note : null,
+        confidence: Number.isFinite(Number(verdict.confidence)) ? Number(verdict.confidence) : null,
+        usage,
+      };
+    }
+    return { verdict: "uphold", note: "verifier returned malformed verdict — proposal kept", confidence: null, usage };
+  } catch (err) {
+    return { verdict: "uphold", note: `verifier error: ${err.message}`, confidence: null, error: true, usage: {} };
+  }
+}
+
 // ── Main entry ───────────────────────────────────────────────────────────────
 
 // data: match context assembled by pipeline.runFullAnalysis, including
@@ -442,21 +522,79 @@ export async function analyzeMatch(data) {
     };
   }
 
-  const { data: prediction, usage } = await claudeAnalyze({
-    systemPrompt: buildSystemPrompt(ouLine, data.fairSource),
-    userPrompt: buildUserPrompt(data),
-  });
-  validateV2(prediction);
+  const systemPrompt = buildSystemPrompt(ouLine, data.fairSource);
+  const userPrompt = buildUserPrompt(data);
+  const tokens = { input: 0, output: 0 };
+  const addTokens = (usage) => {
+    tokens.input += usage?.input_tokens ?? 0;
+    tokens.output += usage?.output_tokens ?? 0;
+  };
 
-  const confidence = Math.round(Number(prediction.confidence));
-  const { deltas: cleanDeltas, violations: sanitizeViolations } = sanitizeDeltas(prediction.deltas);
-  const violations = [...sanitizeViolations];
+  const sampleOnce = async () => {
+    const { data: prediction, usage } = await claudeAnalyze({ systemPrompt, userPrompt });
+    validateV2(prediction);
+    addTokens(usage);
+    return prediction;
+  };
+
+  // Adaptive ensemble: two independent samples kill single-run sampling
+  // noise; a gap > ENSEMBLE_DISAGREE_PP means the evidence doesn't pin
+  // the answer down → one tiebreak sample, per-key median, and the
+  // LOWEST sample confidence (instability is itself evidence weakness).
+  const settled = await Promise.allSettled([sampleOnce(), sampleOnce()]);
+  const predictions = settled.filter((r) => r.status === "fulfilled").map((r) => r.value);
+  if (!predictions.length) {
+    throw settled[0].reason;
+  }
+
+  const violations = [];
+  let sampleDeltas = predictions.map((p) => sanitizeDeltas(p.deltas).deltas);
+  let disagreement = null;
+  let tiebreak = false;
+
+  if (predictions.length === 2) {
+    disagreement = Math.round(maxDeltaGap(sampleDeltas[0], sampleDeltas[1]) * 10) / 10;
+    if (disagreement > ENSEMBLE_DISAGREE_PP) {
+      tiebreak = true;
+      try {
+        const third = await sampleOnce();
+        predictions.push(third);
+        sampleDeltas.push(sanitizeDeltas(third.deltas).deltas);
+      } catch (err) {
+        violations.push(`tiebreak sample failed (${err.message}) — proceeding with 2 samples`);
+      }
+    }
+  } else {
+    violations.push("one ensemble sample failed validation — single-sample mode");
+  }
+
+  for (const p of predictions) {
+    violations.push(...sanitizeDeltas(p.deltas).violations);
+  }
+
+  const consensusDeltas = medianDeltas(sampleDeltas);
+  const confidences = predictions.map((p) => Math.round(Number(p.confidence)));
+  const confidence = tiebreak
+    ? Math.min(...confidences)
+    : Math.round(confidences.reduce((a, b) => a + b, 0) / confidences.length);
+
+  // Representative narrative: the sample whose deltas sit closest to the
+  // consensus speaks for it on the match card.
+  const closest = predictions
+    .map((p, i) => ({
+      p,
+      dist: ["home", "draw", "away", "over"].reduce(
+        (a, k) => a + Math.abs((sampleDeltas[i][k] ?? 0) - consensusDeltas[k]),
+        0
+      ),
+    }))
+    .sort((a, b) => a.dist - b.dist)[0].p;
 
   // Cross-field consistency: a big delta claims exceptional evidence, and
   // exceptional evidence cannot be low-confidence. Zero contradictory output.
-  let effectiveDeltas = cleanDeltas;
+  let effectiveDeltas = consensusDeltas;
   const maxAbs = Math.max(
-    ...["home", "draw", "away", "over"].map((k) => Math.abs(cleanDeltas[k]))
+    ...["home", "draw", "away", "over"].map((k) => Math.abs(consensusDeltas[k]))
   );
   if (maxAbs >= BIG_DELTA && confidence < 50) {
     violations.push(
@@ -465,14 +603,39 @@ export async function analyzeMatch(data) {
     effectiveDeltas = { home: 0, draw: 0, away: 0, over: 0 };
   }
 
+  // Skeptic audit: any surviving non-zero proposal must withstand a
+  // refute-by-default review of its evidence (specific? recent? unpriced?).
+  const keyFactors = Array.isArray(closest.keyFactors) ? closest.keyFactors : [];
+  let verification = { status: "skipped", note: null, skepticConfidence: null };
+  const hasProposal = ["home", "draw", "away", "over"].some((k) => effectiveDeltas[k] !== 0);
+  let finalConfidence = confidence;
+  if (hasProposal) {
+    const audit = await skepticVerify(data, effectiveDeltas, keyFactors, closest.reasoning);
+    addTokens(audit.usage);
+    if (audit.verdict === "refute") {
+      verification = { status: "refuted", note: audit.note, skepticConfidence: null };
+      violations.push(`skeptic refuted: ${audit.note ?? "no note"}`);
+      effectiveDeltas = { home: 0, draw: 0, away: 0, over: 0 };
+    } else {
+      verification = {
+        status: audit.error ? "error" : "upheld",
+        note: audit.note,
+        skepticConfidence: audit.confidence,
+      };
+      if (audit.confidence != null) {
+        finalConfidence = Math.min(finalConfidence, Math.round(audit.confidence));
+      }
+    }
+  }
+
   const anchored = applyMarketAnchoredDeltas(data.fairProbs, effectiveDeltas);
   violations.push(...anchored.violations);
 
   if (violations.length) {
-    console.log(`[analyze] ${data.home} vs ${data.away} — protocol violations: ${violations.join(" | ")}`);
+    console.log(`[analyze] ${data.home} vs ${data.away} — protocol notes: ${violations.join(" | ")}`);
   }
   console.log(
-    `[analyze] ${data.home} vs ${data.away} — deltas=${JSON.stringify(anchored.appliedDeltas)} conf=${confidence} tokens in=${usage?.input_tokens ?? 0} out=${usage?.output_tokens ?? 0}`
+    `[analyze] ${data.home} vs ${data.away} — samples=${predictions.length} gap=${disagreement} deltas=${JSON.stringify(anchored.appliedDeltas)} conf=${finalConfidence} verify=${verification.status} tokens in=${tokens.input} out=${tokens.output}`
   );
 
   return {
@@ -481,22 +644,26 @@ export async function analyzeMatch(data) {
     overUnder: anchored.overUnder,
     overUnderExact: anchored.overUnderExact,
     ouLine,
-    confidence,
+    confidence: finalConfidence,
     deltas: anchored.appliedDeltas,
-    deltasRaw: prediction.deltas,
+    deltasRaw: predictions.map((p) => p.deltas),
+    ensemble: {
+      samples: predictions.length,
+      disagreement,
+      tiebreak,
+      confidences,
+    },
+    verification,
     protocolViolations: violations,
-    keyFactors: Array.isArray(prediction.keyFactors) ? prediction.keyFactors : [],
-    reasoning: prediction.reasoning,
-    reasoningKr: prediction.reasoningKr ?? prediction.reasoning,
+    keyFactors,
+    reasoning: closest.reasoning,
+    reasoningKr: closest.reasoningKr ?? closest.reasoning,
     isFanTeam: data.isFanTeam || false,
     odds: data.odds || null,
     model: MODEL,
     backend: "claude-cli",
     engine: "v2-market-anchored",
     skipped: null,
-    tokens: {
-      input: usage?.input_tokens ?? 0,
-      output: usage?.output_tokens ?? 0,
-    },
+    tokens,
   };
 }

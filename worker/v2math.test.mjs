@@ -8,6 +8,8 @@ import {
   sanitizeDeltas,
   roundToHundred,
   scheduleFacts,
+  medianDeltas,
+  maxDeltaGap,
   MAX_MW_DELTA,
   DRAW_FLOOR_SLACK,
 } from "./analyzer.js";
@@ -132,6 +134,27 @@ test("scheduleFacts computes rest and congestion", () => {
   assert.equal(f.matchesInLast14Days, 2);
   assert.ok(f.daysToNextMatch > 3.5 && f.daysToNextMatch < 4.5);
   assert.equal(f.nextMatchCompetition, "UEFA Champions League");
+});
+
+test("maxDeltaGap finds the largest per-key disagreement", () => {
+  const a = { home: 3, draw: 0, away: -3, over: 2 };
+  const b = { home: 1, draw: -1, away: 0, over: 6 };
+  assert.equal(maxDeltaGap(a, b), 4); // over: |2-6|
+  assert.equal(maxDeltaGap(a, a), 0);
+  assert.equal(maxDeltaGap({}, { home: 5 }), 5); // missing keys read as 0
+});
+
+test("medianDeltas: median of 2 is the mean, median of 3 is the middle", () => {
+  const two = medianDeltas([{ home: 4, draw: 0, away: -4, over: 0 }, { home: 2, draw: 0, away: -2, over: 2 }]);
+  assert.equal(two.home, 3);
+  assert.equal(two.over, 1);
+  const three = medianDeltas([
+    { home: 7, draw: 0, away: -7, over: 0 },
+    { home: 1, draw: 0, away: -1, over: 0 },
+    { home: 2, draw: 0, away: -2, over: 0 },
+  ]);
+  assert.equal(three.home, 2); // outlier +7 neutralized
+  assert.equal(three.away, -2);
 });
 
 test("scheduleFacts tolerates empty inputs", () => {
