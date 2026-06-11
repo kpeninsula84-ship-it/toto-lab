@@ -178,8 +178,8 @@ Single-page app (`index.html`):
   is no `analyzed: true` skip filter. This keeps injury, odds, and form
   data fresh as kickoff approaches.
 - Pick thresholds live in `worker/pipeline.js`: `EDGE_THRESHOLD = 5`,
-  `CONFIDENCE_THRESHOLD = 50`, `SECONDARY_CONFIDENCE_MIN = 40`,
-  `MAX_PICKS = 3`.
+  `CONFIDENCE_THRESHOLD = 50`, `MAX_PICKS = 3`. There is no secondary
+  tier — engine v2 discards low-confidence proposals upstream.
 - **Engine v2 is market-anchored**: the model never invents
   probabilities. It returns deltas against the de-vigged fair baseline
   (`MAX_MW_DELTA = 7`, `MAX_OU_DELTA = 6` in `worker/analyzer.js`);

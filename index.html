@@ -61,8 +61,6 @@
         singles: "Singles recommended.",
         accaOdds: (odds, ret) =>
           `Acca odds: <strong class="text-green-400">${odds}x</strong> (£10 returns £${ret})`,
-        secondaryTitle: "Secondary Picks (Conf 40~49)",
-        secondaryDesc: "Edge met, low confidence — reference only",
         noRecs: "No recommendations yet. Waiting for next analysis run.",
         failedPicks: (msg) => `Failed to load picks: ${msg}`,
         // match card
@@ -118,8 +116,6 @@
         singles: "단식 베팅 권장.",
         accaOdds: (odds, ret) =>
           `Acca 배당: <strong class="text-green-400">${odds}x</strong> (£10 → £${ret})`,
-        secondaryTitle: "참고 픽 (Conf 40~49)",
-        secondaryDesc: "Edge 충족, 신뢰도 낮음 — 참고용",
         noRecs: "아직 추천 픽이 없습니다. 다음 분석 실행을 기다려주세요.",
         failedPicks: (msg) => `픽 불러오기 실패: ${msg}`,
         // match card
@@ -291,8 +287,6 @@
         const rec = snap.data();
 
         if (rec.pickCount === 0) {
-          const secondary = rec.secondaryPicks || [];
-          const secHtml = secondary.map((p) => renderSecondaryCard(p)).join("");
           container.innerHTML = `
             <div class="bg-yellow-900/30 border border-yellow-700 rounded-lg p-5 mb-4">
               <h3 class="text-lg font-bold text-yellow-300 mb-2">${t("noValueBetsTitle")}</h3>
@@ -300,12 +294,6 @@
                 ${t("noValueBetsDesc", rec.totalAnalyzed, rec.threshold.edge, rec.threshold.confidence)}
               </p>
             </div>
-            ${secondary.length > 0 ? `
-              <div class="mb-2 flex justify-between items-baseline">
-                <h3 class="text-base font-bold text-yellow-400">${t("secondaryTitle")}</h3>
-                <p class="text-xs text-gray-500">${t("secondaryDesc")}</p>
-              </div>
-              <div class="space-y-2">${secHtml}</div>` : ""}
           `;
           return;
         }
@@ -330,17 +318,6 @@
           ? `<p class="text-sm text-gray-400 mt-3">${t("accaOdds", rec.comboOdds, (10 * rec.comboOdds).toFixed(2))}</p>`
           : `<p class="text-sm text-gray-400 mt-3">${t("singles")}</p>`;
 
-        const secondaryPicks = rec.secondaryPicks || [];
-        const secondaryHtml = secondaryPicks.map((p) => renderSecondaryCard(p)).join("");
-        const secondarySection = secondaryPicks.length > 0 ? `
-          <div class="mt-5">
-            <div class="mb-2 flex justify-between items-baseline">
-              <h3 class="text-base font-bold text-yellow-400">${t("secondaryTitle")}</h3>
-              <p class="text-xs text-gray-500">${t("secondaryDesc")}</p>
-            </div>
-            <div class="space-y-2">${secondaryHtml}</div>
-          </div>` : "";
-
         container.innerHTML = `
           <div class="mb-3 flex justify-between items-baseline">
             <h3 class="text-lg font-bold text-white">${t("valuePicks", rec.pickCount)}</h3>
@@ -348,27 +325,10 @@
           </div>
           <div class="space-y-2">${picksHtml}</div>
           ${comboInfo}
-          ${secondarySection}
         `;
       } catch (err) {
         container.innerHTML = `<p class="text-red-400 text-sm text-center py-4">${t("failedPicks", err.message)}</p>`;
       }
-    }
-
-    function renderSecondaryCard(p) {
-      const kickoff = p.kickoff.toDate ? p.kickoff.toDate() : new Date(p.kickoff);
-      return `
-        <div class="bg-gray-800 border border-yellow-600/40 rounded-lg p-4 flex items-start gap-3">
-          <div class="text-lg font-bold text-yellow-400 w-8">△</div>
-          <div class="flex-1">
-            <p class="text-xs text-gray-400">${kickoff.toLocaleString("en-GB", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
-            <h4 class="text-white font-semibold">${p.home} vs ${p.away}</h4>
-            <p class="text-yellow-400 text-sm mt-1">
-              <strong>${getPickLabel(p.pick, p.ouLine)}</strong> @${p.odds}
-              <span class="text-gray-400 ml-2">· EV ${p.ev >= 0 ? "+" : ""}${p.ev}% · Edge +${p.edge}% · Conf ${p.confidence}</span>
-            </p>
-          </div>
-        </div>`;
     }
 
     // ── loadMatches ───────────────────────────────────────────────────────────

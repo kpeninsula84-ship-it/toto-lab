@@ -19,7 +19,6 @@ import { analyzeMatch, fetchTeamInjuries } from "./analyzer.js";
 export const ARSENAL_TEAM_ID = 57;
 export const EDGE_THRESHOLD = 5;
 export const CONFIDENCE_THRESHOLD = 50;
-export const SECONDARY_CONFIDENCE_MIN = 40;
 export const MAX_PICKS = 3;
 export const DEFAULT_HORIZON_HOURS = 24;
 
@@ -277,8 +276,10 @@ export async function computeAndSaveRecommendations() {
   const now = Timestamp.now();
   const snap = await db.collection("matches").where("kickoff", ">=", now).get();
 
+  // Engine v2 discards big-delta/low-confidence output upstream, so a
+  // sub-threshold-confidence tier would only display picks the engine
+  // has already decided not to trust. Strong tier only.
   const strong = [];
-  const secondary = [];
   let totalAnalyzed = 0;
 
   for (const doc of snap.docs) {
@@ -320,14 +321,11 @@ export async function computeAndSaveRecommendations() {
     };
 
     if (conf >= CONFIDENCE_THRESHOLD) strong.push(entry);
-    else if (conf >= SECONDARY_CONFIDENCE_MIN) secondary.push(entry);
   }
 
   strong.sort((a, b) => b.score - a.score);
-  secondary.sort((a, b) => b.score - a.score);
 
   const picks = strong.slice(0, MAX_PICKS);
-  const secondaryPicks = secondary.slice(0, MAX_PICKS);
   const comboOdds = picks.reduce((acc, p) => acc * p.odds, 1);
 
   const payload = {
@@ -336,13 +334,12 @@ export async function computeAndSaveRecommendations() {
     totalPassed: strong.length,
     pickCount: picks.length,
     picks,
-    secondaryPicks,
     comboOdds: picks.length >= 2 ? Number(comboOdds.toFixed(2)) : null,
     threshold: { edge: EDGE_THRESHOLD, confidence: CONFIDENCE_THRESHOLD, edgeBasis: "fair_devigged" },
     backend: "claude-cli",
   };
 
   await db.collection("recommendations").doc("current").set(payload);
-  console.log(`[recommendations] analyzed=${totalAnalyzed} passed=${strong.length} picks=${picks.length} secondary=${secondaryPicks.length}`);
+  console.log(`[recommendations] analyzed=${totalAnalyzed} passed=${strong.length} picks=${picks.length}`);
   return payload;
 }
