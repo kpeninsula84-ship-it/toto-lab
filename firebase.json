@@ -3,9 +3,13 @@
     "public": ".",
     "ignore": [
       "firebase.json",
+      "firestore.*",
       "**/.*",
       "**/node_modules/**",
-      "functions/**"
+      "functions/**",
+      "worker/**",
+      "ideas/**",
+      "**/*.md"
     ],
     "rewrites": [
       {
