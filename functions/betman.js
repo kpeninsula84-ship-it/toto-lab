@@ -16,25 +16,39 @@
 const BASE_URL = "https://www.betman.co.kr";
 const GM_ID = "G101"; // 프로토 승부식
 
-async function betmanPost(path, params) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json; charset=UTF-8",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-      Referer: `${BASE_URL}/main/mainPage/gamebuy/gameSlip.do?gmId=${GM_ID}`,
-    },
-    body: JSON.stringify({ ...params, _sbmInfo: { debugMode: "false" } }),
-  });
-  if (!res.ok) {
-    throw new Error(`betman ${path} HTTP ${res.status}`);
+// Betman's TLS stack is legacy (renegotiation-happy) and intermittently
+// drops connections (ECONNRESET) — retry with a short backoff.
+async function betmanPost(path, params, retries = 3) {
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(`${BASE_URL}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json; charset=UTF-8",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+          Referer: `${BASE_URL}/main/mainPage/gamebuy/gameSlip.do?gmId=${GM_ID}`,
+        },
+        body: JSON.stringify({ ...params, _sbmInfo: { debugMode: "false" } }),
+      });
+      if (!res.ok) {
+        throw new Error(`betman ${path} HTTP ${res.status}`);
+      }
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`betman ${path} returned non-JSON (${text.slice(0, 120)})`);
+      }
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        console.log(`[betman] ${path} attempt ${attempt} failed (${err.message}) — retrying`);
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
   }
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`betman ${path} returned non-JSON (${text.slice(0, 120)})`);
-  }
+  throw lastErr;
 }
 
 export async function fetchBetmanRounds() {
@@ -219,17 +233,25 @@ export function findBetmanFixture(fixtures, home, away, kickoffMillis) {
 }
 
 // ── Diagnostics CLI: `node betman.js` hits the live API ─────────────────────
+// NOTE: must stay free of top-level await — the firebase-functions loader
+// require()s this module's importer, and require() cannot load an ESM
+// graph that contains TLA (ERR_REQUIRE_ASYNC_MODULE breaks deploys).
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/").split("/").pop())) {
-  const { fixtures, diagnostics } = await getBetmanEplOdds();
-  console.log("on-sale rounds:", diagnostics.rounds.join(", ") || "(none)");
-  console.log("soccer leagues on sale:", diagnostics.soccerLeagues.join(" | ") || "(none)");
-  console.log(`EPL fixtures found: ${fixtures.length}`);
-  for (const fx of fixtures.slice(0, 10)) {
-    console.log(
-      `  ${fx.homeName} vs ${fx.awayName} @${new Date(fx.gameDate).toISOString()} ` +
-        `마감 ${fx.deadline ? new Date(fx.deadline).toISOString() : "?"} ` +
-        `1X2=${JSON.stringify(fx.matchWinner)} OU=${JSON.stringify(fx.overUnder)}`
-    );
-  }
+  (async () => {
+    const { fixtures, diagnostics } = await getBetmanEplOdds();
+    console.log("on-sale rounds:", diagnostics.rounds.join(", ") || "(none)");
+    console.log("soccer leagues on sale:", diagnostics.soccerLeagues.join(" | ") || "(none)");
+    console.log(`EPL fixtures found: ${fixtures.length}`);
+    for (const fx of fixtures.slice(0, 10)) {
+      console.log(
+        `  ${fx.homeName} vs ${fx.awayName} @${new Date(fx.gameDate).toISOString()} ` +
+          `마감 ${fx.deadline ? new Date(fx.deadline).toISOString() : "?"} ` +
+          `1X2=${JSON.stringify(fx.matchWinner)} OU=${JSON.stringify(fx.overUnder)}`
+      );
+    }
+  })().catch((err) => {
+    console.error("FATAL:", err);
+    process.exit(1);
+  });
 }
