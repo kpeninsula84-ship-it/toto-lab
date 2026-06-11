@@ -100,72 +100,97 @@ function computeClvFields(m) {
   return Object.keys(out).length ? out : null;
 }
 
+// EPL seasons run Aug–May: a July+ kickoff belongs to the season starting
+// that year, otherwise to the season that started the previous year.
+function seasonOf(kickoff) {
+  const d = kickoff?.toDate ? kickoff.toDate() : null;
+  if (!d) return "unknown";
+  const y = d.getUTCFullYear();
+  const startYear = d.getUTCMonth() >= 6 ? y : y - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
+}
+
+function newStatsBucket() {
+  return { totalPicks: 0, wins: 0, pushes: 0, totalProfit: 0, clvSum: 0, clvCount: 0, byPickType: {} };
+}
+
+function addToStatsBucket(b, m, pickOdds) {
+  if (typeof m.clv === "number") {
+    b.clvSum += m.clv;
+    b.clvCount++;
+  }
+  // Pushes return the stake: counted separately, excluded from win
+  // rate and P&L (which cover decided bets only).
+  if (m.result === "push") {
+    b.pushes++;
+    return;
+  }
+  b.totalPicks++;
+  b.byPickType[m.pick] = b.byPickType[m.pick] || { count: 0, wins: 0 };
+  b.byPickType[m.pick].count++;
+  if (m.result === "won") {
+    b.wins++;
+    b.totalProfit += FLAT_STAKE * (pickOdds - 1);
+    b.byPickType[m.pick].wins++;
+  } else {
+    b.totalProfit -= FLAT_STAKE;
+  }
+}
+
+function finalizeStatsBucket(b) {
+  const totalStake = b.totalPicks * FLAT_STAKE;
+  return {
+    totalPicks: b.totalPicks,
+    wins: b.wins,
+    losses: b.totalPicks - b.wins,
+    pushes: b.pushes,
+    winRate: b.totalPicks > 0 ? Math.round((b.wins / b.totalPicks) * 1000) / 10 : 0,
+    totalStake,
+    totalProfit: Math.round(b.totalProfit),
+    roi: totalStake > 0 ? Math.round((b.totalProfit / totalStake) * 1000) / 10 : 0,
+    avgClv: b.clvCount > 0 ? Math.round((b.clvSum / b.clvCount) * 10) / 10 : null,
+    clvCount: b.clvCount,
+    byPickType: b.byPickType,
+  };
+}
+
 async function computeAndSaveStats() {
   const snap = await db
     .collection("matches")
     .where("result", "in", ["won", "lost", "push"])
     .get();
 
-  let totalPicks = 0;
-  let wins = 0;
-  let pushes = 0;
-  let totalProfit = 0;
-  let clvSum = 0;
-  let clvCount = 0;
-  const byPickType = {};
+  const overall = newStatsBucket();
+  const seasons = {};
 
   for (const doc of snap.docs) {
     const m = doc.data();
     if (!m.pick) continue;
-    if (typeof m.clv === "number") {
-      clvSum += m.clv;
-      clvCount++;
-    }
-    // Pushes return the stake: counted separately, excluded from win
-    // rate and P&L (which cover decided bets only).
-    if (m.result === "push") {
-      pushes++;
-      continue;
-    }
     const pickOdds = getOddsForPick(m);
-    if (!pickOdds) continue;
+    if (!pickOdds && m.result !== "push") continue;
 
-    totalPicks++;
-    byPickType[m.pick] = byPickType[m.pick] || { count: 0, wins: 0 };
-    byPickType[m.pick].count++;
-
-    if (m.result === "won") {
-      wins++;
-      totalProfit += FLAT_STAKE * (pickOdds - 1);
-      byPickType[m.pick].wins++;
-    } else {
-      totalProfit -= FLAT_STAKE;
-    }
+    addToStatsBucket(overall, m, pickOdds);
+    const season = seasonOf(m.kickoff);
+    seasons[season] = seasons[season] || newStatsBucket();
+    addToStatsBucket(seasons[season], m, pickOdds);
   }
 
-  const totalStake = totalPicks * FLAT_STAKE;
+  const bySeason = {};
+  for (const [season, bucket] of Object.entries(seasons)) {
+    bySeason[season] = finalizeStatsBucket(bucket);
+  }
+
+  // Top-level fields stay all-time (legacy shape); per-season lives in
+  // bySeason and the frontend headlines the current season.
   const stats = {
     updatedAt: Timestamp.now(),
-    totalPicks,
-    wins,
-    losses: totalPicks - wins,
-    pushes,
-    winRate:
-      totalPicks > 0 ? Math.round((wins / totalPicks) * 1000) / 10 : 0,
-    totalStake,
-    totalProfit: Math.round(totalProfit),
-    roi:
-      totalStake > 0
-        ? Math.round((totalProfit / totalStake) * 1000) / 10
-        : 0,
-    avgClv: clvCount > 0 ? Math.round((clvSum / clvCount) * 10) / 10 : null,
-    clvCount,
-    byPickType,
+    ...finalizeStatsBucket(overall),
+    bySeason,
   };
 
   await db.collection("stats").doc("summary").set(stats);
   console.log(
-    `[stats] picks=${totalPicks} wins=${wins} winRate=${stats.winRate}% ROI=${stats.roi}%`
+    `[stats] picks=${stats.totalPicks} wins=${stats.wins} winRate=${stats.winRate}% ROI=${stats.roi}% avgClv=${stats.avgClv} seasons=${Object.keys(bySeason).join(",")}`
   );
   return stats;
 }
