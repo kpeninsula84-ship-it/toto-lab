@@ -10,6 +10,7 @@ All times KST.
 
 ```
 06:00 daily          collectFixtures        Cloud Functions     pull next 7 days of EPL fixtures
+11:30 daily          collectBetmanOdds      Cloud Functions     Betman 프로토 odds + deadlines onto match docs
 12:00 daily          worker.yml             GitHub Actions      re-analyze every match in next 24h
 19:00-05:30 KST      closing.yml            GitHub Actions      snapshot closing odds (30min cadence,
   (10:00-20:30 UTC)                                             only acts when kickoff < 75min away)

@@ -114,6 +114,21 @@ function selectPick(analysis, fairProbs) {
     : { pick: null, edgeFair };
 }
 
+// Betman (프로토) price for the pick, from the betman snapshot the Seoul
+// Cloud Function attaches to match docs. O/U only at the matching line.
+function getBetmanPriceForPick(m) {
+  const b = m.betman;
+  if (!b || !m.pick) return null;
+  if (m.pick === "home" || m.pick === "draw" || m.pick === "away") {
+    return b.matchWinner?.[m.pick] ?? null;
+  }
+  if (m.pick === "over" || m.pick === "under") {
+    const entry = (b.overUnder || []).find((l) => l.line === (m.ouLine ?? 2.5));
+    return entry?.[m.pick] ?? null;
+  }
+  return null;
+}
+
 function pickLabel(pick, ouLine) {
   if (pick === "over") return `${ouLine} 오버`;
   if (pick === "under") return `${ouLine} 언더`;
@@ -303,6 +318,14 @@ export async function computeAndSaveRecommendations() {
 
     const ev = modelProbFraction * pickOdds - 1;
 
+    // Betman execution info: actual Korean-market price and its EV.
+    // minOdds = 1 / fair probability — the de-vigged market's own
+    // break-even. Taking a price above it is +EV even if our model adds
+    // nothing; below it, skip the bet regardless of the pick.
+    const betmanOdds = getBetmanPriceForPick(m);
+    const betmanEv = betmanOdds != null ? Math.round((modelProbFraction * betmanOdds - 1) * 1000) / 10 : null;
+    const minOdds = fairProb > 0 ? Math.round((1 / fairProb) * 100) / 100 : null;
+
     const entry = {
       fixtureId: m.fixtureId,
       home: m.home,
@@ -318,6 +341,10 @@ export async function computeAndSaveRecommendations() {
       ev: Math.round(ev * 1000) / 10,
       confidence: conf,
       score: Math.round(ev * Math.sqrt(conf / 100) * 100) / 100,
+      betmanOdds,
+      betmanEv,
+      betmanDeadline: m.betman?.deadline ?? null,
+      minOdds,
     };
 
     if (conf >= CONFIDENCE_THRESHOLD) strong.push(entry);

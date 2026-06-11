@@ -5,6 +5,7 @@ import { setGlobalOptions } from "firebase-functions/v2";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { getUpcomingMatches, getFinishedMatches } from "./footballData.js";
+import { getBetmanEplOdds, findBetmanFixture } from "./betman.js";
 
 initializeApp();
 setGlobalOptions({ region: "asia-northeast3", maxInstances: 5 });
@@ -320,6 +321,77 @@ export const collectResultsManual = onRequest(
   }
 );
 
+// Pull Betman (스포츠토토 프로토) fixed odds + per-match sale deadlines and
+// attach them to upcoming match docs. Runs from Seoul (asia-northeast3)
+// deliberately — Betman may reject non-KR source IPs, which rules out
+// the GitHub Actions worker.
+async function runCollectBetmanOdds() {
+  const { fixtures, diagnostics } = await getBetmanEplOdds();
+  console.log(
+    `[betman] rounds=${diagnostics.rounds.join(",") || "none"} eplFixtures=${fixtures.length} soccerLeagues=${diagnostics.soccerLeagues.join("|") || "none"}`
+  );
+  if (!fixtures.length) return { matched: 0, total: 0, rounds: diagnostics.rounds };
+
+  const now = Date.now();
+  const snap = await db
+    .collection("matches")
+    .where("kickoff", ">=", Timestamp.fromMillis(now - 3 * 3600_000))
+    .where("kickoff", "<=", Timestamp.fromMillis(now + 8 * 24 * 3600_000))
+    .get();
+
+  let matched = 0;
+  const matchedBetmanKeys = new Set();
+  for (const doc of snap.docs) {
+    const m = doc.data();
+    const fx = findBetmanFixture(fixtures, m.home, m.away, m.kickoff.toMillis());
+    if (!fx) continue;
+    matchedBetmanKeys.add(`${fx.homeName}|${fx.awayName}|${fx.gameDate}`);
+    await doc.ref.update({
+      betman: {
+        updatedAt: Timestamp.now(),
+        round: fx.round ?? null,
+        deadline: fx.deadline ? Timestamp.fromMillis(fx.deadline) : null,
+        matchWinner: fx.matchWinner,
+        overUnder: fx.overUnder,
+      },
+    });
+    matched++;
+  }
+
+  // Unmatched Betman EPL fixtures = KR_TEAM_NAMES mapping gaps; these
+  // logs are how the table gets corrected when the season starts.
+  for (const fx of fixtures) {
+    if (!matchedBetmanKeys.has(`${fx.homeName}|${fx.awayName}|${fx.gameDate}`)) {
+      console.log(
+        `[betman] UNMATCHED: ${fx.homeName} vs ${fx.awayName} @${new Date(fx.gameDate).toISOString()} — check KR_TEAM_NAMES in betman.js`
+      );
+    }
+  }
+  console.log(`[betman] matched ${matched}/${fixtures.length} Betman EPL fixtures to match docs`);
+  return { matched, total: fixtures.length, rounds: diagnostics.rounds };
+}
+
+// Daily 11:30 KST — 30 min before the analysis worker, so picks can carry
+// Betman prices and deadlines.
+export const collectBetmanOdds = onSchedule(
+  { schedule: "30 11 * * *", timeZone: "Asia/Seoul", timeoutSeconds: 120 },
+  runCollectBetmanOdds
+);
+
+export const collectBetmanOddsManual = onRequest(
+  { invoker: "public", timeoutSeconds: 120 },
+  async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const summary = await runCollectBetmanOdds();
+      res.json({ ok: true, ...summary });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
 async function sendTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -358,11 +430,23 @@ export const notifyTelegram = onDocumentWritten(
     const PICK_LABEL_KR = {
       home: "홈 승", draw: "무승부", away: "원정 승",
     };
+    const fmtKst = (ts) => {
+      const d = ts?.toDate ? ts.toDate() : new Date(ts);
+      return d.toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    };
     const pickLines = picks.map((p, i) => {
-      const kickoff = p.kickoff?.toDate ? p.kickoff.toDate() : new Date(p.kickoff);
-      const dateStr = kickoff.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      const dateStr = fmtKst(p.kickoff);
       const label = p.pickLabel || PICK_LABEL_KR[p.pick] || p.pick;
-      return `${i + 1}. <b>${p.home} vs ${p.away}</b> (${dateStr})\n   ${label} @${p.odds} · Edge +${p.edge}% · EV +${p.ev}%`;
+      let betmanLine;
+      if (p.betmanOdds != null) {
+        const evStr = p.betmanEv != null ? ` (EV ${p.betmanEv >= 0 ? "+" : ""}${p.betmanEv}%)` : "";
+        const warn = p.betmanEv != null && p.betmanEv < 0 ? " ⚠️ 배당 부족 — 스킵 권장" : "";
+        const deadline = p.betmanDeadline ? ` · 마감 ${fmtKst(p.betmanDeadline)}` : "";
+        betmanLine = `\n   Betman @${p.betmanOdds}${evStr}${warn}${deadline}`;
+      } else {
+        betmanLine = p.minOdds != null ? `\n   최소 베팅 배당 ${p.minOdds} (이 미만이면 스킵)` : "";
+      }
+      return `${i + 1}. <b>${p.home} vs ${p.away}</b> (${dateStr})\n   ${label} @${p.odds} · Edge +${p.edge}% · EV +${p.ev}%${betmanLine}`;
     }).join("\n\n");
 
     const acca = after.comboOdds

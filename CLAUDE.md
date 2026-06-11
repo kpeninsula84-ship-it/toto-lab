@@ -81,9 +81,10 @@ toto-lab/
 │   ├── worker.yml           # Daily analysis cron (12:00 KST) + manual dispatch
 │   ├── closing.yml          # Closing-odds snapshot (30min cadence, kickoff hours)
 │   └── deploy.yml           # firebase deploy on push to main
-├── functions/               # Cloud Functions — fixtures, results, Telegram notifier
+├── functions/               # Cloud Functions — fixtures, results, Betman, Telegram
 │   ├── index.js
 │   ├── footballData.js      # football-data.org API wrapper
+│   ├── betman.js            # Betman 프로토 odds client (reverse-engineered, KR-IP only)
 │   ├── oddsApi.js           # The Odds API wrapper (also used by worker)
 │   └── devig.js             # de-vig math (also used by worker)
 └── worker/                  # Analysis runner (GitHub Actions)
@@ -105,6 +106,7 @@ toto-lab/
 | Result collection | Cloud Functions | cron 09:00 KST daily + 23:00 Sat/Sun |
 | Match analysis (next 24h) | GitHub Actions (`worker.yml`) | cron 12:00 KST daily + manual dispatch |
 | Closing-odds snapshot (CLV) | GitHub Actions (`closing.yml`) | cron every 30 min, 10:00–20:30 UTC |
+| Betman (프로토) odds + deadlines | Cloud Functions (Seoul — KR IP required) | cron 11:30 KST daily |
 | Telegram alert on new picks | Cloud Functions | Firestore trigger on `recommendations/current` |
 | Worker failure alert | GitHub Actions (`worker.yml`) | Telegram message on failed run |
 | Static site + Functions deploy | GitHub Actions (`deploy.yml`) | push to `main` |
