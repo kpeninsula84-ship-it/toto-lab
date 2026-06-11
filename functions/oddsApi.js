@@ -9,10 +9,14 @@ function normalize(name) {
     .trim();
 }
 
+// Quota note: cost per call = regions × markets. eu (Pinnacle) + uk
+// (bet365/Smarkets/Betfair) and h2h + totals are all the engine uses —
+// 4 credits/call. spreads and the us region were dead weight on the
+// free 500/month tier.
 export async function getEPLOdds() {
   const url =
     `${BASE_URL}/sports/soccer_epl/odds?apiKey=${process.env.ODDS_API_KEY}` +
-    `&regions=eu,uk,us&markets=h2h,totals,spreads&oddsFormat=decimal`;
+    `&regions=eu,uk&markets=h2h,totals&oddsFormat=decimal`;
 
   const res = await fetch(url);
   if (!res.ok) {
@@ -23,26 +27,6 @@ export async function getEPLOdds() {
   const used = res.headers.get("x-requests-used");
   console.log(`[odds-api] remaining=${remaining} used=${used}`);
 
-  return res.json();
-}
-
-// Per-team totals (e.g. Arsenal Over 1.5) live on a separate sport key on
-// the-odds-api; we fetch it lazily so the existing single-call flow keeps
-// working when team-totals coverage is unavailable. The function returns
-// the same array shape as getEPLOdds().
-export async function getEPLTeamTotals() {
-  const url =
-    `${BASE_URL}/sports/soccer_epl/odds?apiKey=${process.env.ODDS_API_KEY}` +
-    `&regions=eu,uk,us&markets=team_totals&oddsFormat=decimal`;
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    // Some plans/feeds don't expose team_totals — degrade gracefully.
-    console.log(
-      `[odds-api] team_totals unavailable (${res.status}); skipping`
-    );
-    return [];
-  }
   return res.json();
 }
 

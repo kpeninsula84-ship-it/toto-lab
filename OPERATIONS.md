@@ -115,7 +115,7 @@ re-run the deploy workflow.
 | Firebase Functions | per cron | within free tier | ~$0 |
 | Firestore | per write | within free tier | ~$0 |
 | football-data.org | per call | free tier | $0 |
-| The Odds API | per call | within paid tier already in use | — |
+| The Odds API | per call | free tier, 500 credits/mo — in-season usage ~300 (worker 4/day + closing 4/snapshot) | $0 |
 
 Hard cost attributable to TotoLab: $0.
 

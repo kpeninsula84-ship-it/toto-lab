@@ -12,7 +12,7 @@ import {
   getTeamUpcomingFixtures,
   getStandings,
 } from "../functions/footballData.js";
-import { getEPLOdds, getEPLTeamTotals, findOddsForMatch } from "../functions/oddsApi.js";
+import { getEPLOdds, findOddsForMatch } from "../functions/oddsApi.js";
 import { devigMatchWinner, devigTwoWay } from "../functions/devig.js";
 import { analyzeMatch, fetchTeamInjuries } from "./analyzer.js";
 
@@ -139,7 +139,7 @@ function pickLabel(pick, ouLine) {
 }
 
 // per-match analysis ---------------------------------------------------------
-async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
+async function runFullAnalysis(match, standings, oddsEvents) {
   // H2H is no longer fetched — the market prices it better than the model
   // can read it from 5 samples, and feeding it invited re-pricing of
   // already-priced information.
@@ -155,7 +155,7 @@ async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
 
   const homeStanding = standings.find((s) => s.teamId === match.homeId);
   const awayStanding = standings.find((s) => s.teamId === match.awayId);
-  const odds = findOddsForMatch(oddsEvents, match.home, match.away, teamTotalsEvents);
+  const odds = findOddsForMatch(oddsEvents, match.home, match.away);
   const kickoffDate = match.kickoff.toDate();
   const hoursToKickoff = Math.round((kickoffDate.getTime() - Date.now()) / 3600_000);
 
@@ -247,11 +247,7 @@ export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS,
 
   console.log(`[${label}] analyzing ${upcoming.length} matches (${horizonHours}h window)`);
 
-  const [standings, oddsEvents, teamTotalsEvents] = await Promise.all([
-    getStandings(),
-    getEPLOdds(),
-    getEPLTeamTotals(),
-  ]);
+  const [standings, oddsEvents] = await Promise.all([getStandings(), getEPLOdds()]);
 
   let analyzedCount = 0;
   let errorCount = 0;
@@ -259,7 +255,7 @@ export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS,
     const m = doc.data();
     try {
       console.log(`[${label}] analyzing ${m.home} vs ${m.away}`);
-      const result = await runFullAnalysis(m, standings, oddsEvents, teamTotalsEvents);
+      const result = await runFullAnalysis(m, standings, oddsEvents);
       // A skipped analysis (no odds yet) stays "pending" so the frontend
       // doesn't render it as an analysed no-value match.
       await doc.ref.update({ ...result, analyzed: !result.skipped, analyzedAt: Timestamp.now() });
