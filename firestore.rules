@@ -25,6 +25,11 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    // 분석 실행 로그: 읽기 공개("마지막 분석" 표시용), 쓰기는 서버만
+    match /runs/{runId} {
+      allow read: if true;
+      allow write: if false;
+    }
     // 방문자 카운터: 클라이언트는 읽기 + total/daily.{today} +1 증가만 허용
     match /stats/visits {
       allow read: if true;

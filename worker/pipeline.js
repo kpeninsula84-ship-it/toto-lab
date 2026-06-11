@@ -183,8 +183,23 @@ async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
   };
 }
 
+// Heartbeat for the frontend's "last analysis" line and for debugging
+// run history. Logging must never fail the run itself.
+async function logRun(fields) {
+  try {
+    await db.collection("runs").add({
+      ...fields,
+      finishedAt: Timestamp.now(),
+      engine: "v2-market-anchored",
+    });
+  } catch (err) {
+    console.error(`[runs] failed to log run: ${err.message}`);
+  }
+}
+
 // main entry — analyze every SCHEDULED/TIMED match in the next horizon -------
 export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS, label = "worker") {
+  const startedAt = Timestamp.now();
   const now = Date.now();
   const horizon = Timestamp.fromMillis(now + horizonHours * 60 * 60 * 1000);
 
@@ -203,7 +218,16 @@ export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS,
     console.log(`[${label}] no upcoming EPL matches in next ${horizonHours}h`);
     // Still refresh recommendations/current — otherwise the site keeps
     // showing the previous round's picks indefinitely (e.g. all off-season).
-    await computeAndSaveRecommendations();
+    const payload = await computeAndSaveRecommendations();
+    await logRun({
+      startedAt,
+      label,
+      horizonHours,
+      matches: 0,
+      analyzed: 0,
+      errors: 0,
+      picks: payload?.pickCount ?? 0,
+    });
     return;
   }
 
@@ -215,6 +239,8 @@ export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS,
     getEPLTeamTotals(),
   ]);
 
+  let analyzedCount = 0;
+  let errorCount = 0;
   for (const doc of upcoming) {
     const m = doc.data();
     try {
@@ -223,8 +249,10 @@ export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS,
       // A skipped analysis (no odds yet) stays "pending" so the frontend
       // doesn't render it as an analysed no-value match.
       await doc.ref.update({ ...result, analyzed: !result.skipped, analyzedAt: Timestamp.now() });
+      analyzedCount++;
     } catch (err) {
       console.error(`[${label}] failed: ${m.home} vs ${m.away} —`, err.message);
+      errorCount++;
       await doc.ref.update({
         analysisError: err.message,
         analysisErrorAt: Timestamp.now(),
@@ -232,7 +260,16 @@ export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS,
     }
   }
 
-  await computeAndSaveRecommendations();
+  const payload = await computeAndSaveRecommendations();
+  await logRun({
+    startedAt,
+    label,
+    horizonHours,
+    matches: upcoming.length,
+    analyzed: analyzedCount,
+    errors: errorCount,
+    picks: payload?.pickCount ?? 0,
+  });
 }
 
 // recommendations ------------------------------------------------------------

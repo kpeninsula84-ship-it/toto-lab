@@ -51,6 +51,7 @@
         allTimeLine: (n, wr, roi) => `All-time: ${n} picks · ${wr}% hit · ROI ${roi}%`,
         noPicksYet: "No recorded picks yet.",
         failedStats: (msg) => `Failed to load stats: ${msg}`,
+        lastAnalysis: (when, n) => `Last analysis: ${when} · ${n} matches`,
         // recommendations
         valuePicks: (n) => `Value Picks (${n})`,
         analysedPassed: (a, p) => `Analysed ${a} · Passed ${p}`,
@@ -106,6 +107,7 @@
         allTimeLine: (n, wr, roi) => `전체 누적: ${n}픽 · 적중률 ${wr}% · ROI ${roi}%`,
         noPicksYet: "기록된 픽이 없습니다.",
         failedStats: (msg) => `통계 불러오기 실패: ${msg}`,
+        lastAnalysis: (when, n) => `마지막 분석: ${when} · ${n}경기`,
         // recommendations
         valuePicks: (n) => `Value Picks (${n})`,
         analysedPassed: (a, p) => `분석 ${a} · 통과 ${p}`,
@@ -185,6 +187,7 @@
       loadMatches();
       loadStats();
       loadArchive();
+      loadLastRun();
     };
 
     // ── Data helpers ──────────────────────────────────────────────────────────
@@ -509,6 +512,36 @@
       return div;
     }
 
+    // ── loadLastRun ───────────────────────────────────────────────────────────
+
+    function timeAgo(date) {
+      const mins = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
+      if (currentLang === "kr") {
+        if (mins < 60) return `${mins}분 전`;
+        if (mins < 48 * 60) return `${Math.round(mins / 60)}시간 전`;
+        return `${Math.round(mins / 1440)}일 전`;
+      }
+      if (mins < 60) return `${mins}m ago`;
+      if (mins < 48 * 60) return `${Math.round(mins / 60)}h ago`;
+      return `${Math.round(mins / 1440)}d ago`;
+    }
+
+    async function loadLastRun() {
+      const el = document.getElementById("last-run");
+      if (!el) return;
+      try {
+        const q = query(collection(db, "runs"), orderBy("finishedAt", "desc"), limit(1));
+        const snap = await getDocs(q);
+        if (snap.empty) { el.textContent = ""; return; }
+        const r = snap.docs[0].data();
+        const when = r.finishedAt?.toDate ? r.finishedAt.toDate() : null;
+        if (!when) { el.textContent = ""; return; }
+        el.textContent = t("lastAnalysis", timeAgo(when), r.analyzed ?? 0);
+      } catch {
+        el.textContent = "";
+      }
+    }
+
     // ── trackAndDisplayVisits ─────────────────────────────────────────────────
 
     async function trackAndDisplayVisits() {
@@ -640,6 +673,7 @@
       loadMatches();
       loadStats();
       loadArchive();
+      loadLastRun();
       trackAndDisplayVisits();
     });
   </script>
@@ -650,6 +684,7 @@
       <div>
         <h1 class="text-2xl font-bold">⚽ TotoLab</h1>
         <p class="text-sm text-gray-400" data-i18n="tagline">AI-powered EPL betting analysis · Updated daily</p>
+        <p id="last-run" class="text-xs text-gray-600 mt-0.5"></p>
       </div>
       <button
         id="lang-toggle"
