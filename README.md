@@ -39,7 +39,7 @@ AI-powered EPL betting analysis — value picks updated daily.
 
 ### Automated Pipeline
 - `collectFixtures` — daily 06:00 KST, pulls next 7 days from football-data.org
-- `totolab-worker.timer` — daily 12:00 KST on the VPS, re-analyzes every match in the next 24h
+- `worker.yml` — daily 12:00 KST on GitHub Actions, re-analyzes every match in the next 24h (Telegram alert on failure)
 - `collectResults` — daily 09:00 KST + same-night Sat/Sun 23:00 KST, reconciles finished matches
 
 ---
@@ -52,7 +52,7 @@ AI-powered EPL betting analysis — value picks updated daily.
 - Firebase CLI: `npm install -g firebase-tools`
 - A Firebase project with Firestore and Hosting enabled
 - API keys: `FOOTBALL_DATA_TOKEN`, `ODDS_API_KEY`
-- A host running [ai-debate](https://github.com/.../ai-debate) on `localhost:3000` (the worker calls it for AI analysis — Claude Code CLI under the user's subscription, so no Anthropic API key required)
+- [Claude Code](https://claude.com/claude-code) CLI — the worker spawns it headlessly for AI analysis under your subscription, so no Anthropic API key is required (in CI, auth comes from a `claude setup-token` OAuth token)
 
 ### Install and run locally
 
@@ -74,7 +74,7 @@ cd worker && npm install && cd ..
 # worker/.env
 # FOOTBALL_DATA_TOKEN=...
 # ODDS_API_KEY=...
-# AI_DEBATE_URL=http://localhost:3000
+# GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 
 # Local emulators (Functions + Firestore)
 firebase emulators:start
@@ -87,11 +87,16 @@ node runOnce.js 48       # one-off wider sweep
 
 ### Deploy
 
+Push to `main` — [`deploy.yml`](.github/workflows/deploy.yml) runs
+`firebase deploy` on a GitHub-hosted runner, recreating `functions/.env`
+from Actions secrets. Manual deploy also works:
+
 ```bash
 firebase deploy
 ```
 
-Worker runs on a VPS, not Cloud Functions. See [`infra/README.md`](infra/README.md) for the systemd unit + deploy script.
+The analysis worker is not deployed anywhere — it runs from the repo
+checkout inside [`worker.yml`](.github/workflows/worker.yml).
 
 ### Manual operations
 
@@ -117,13 +122,11 @@ graph TD
         TG[notifyTelegram] -.->|trigger on recommendations/current| TGAPI((Telegram))
     end
 
-    subgraph "VPS (Contabo)"
-        Timer[totolab-worker.timer<br/>12:00 KST daily] --> Worker
-        Worker[worker/runOnce.js] -->|HTTP| AID[ai-debate localhost:3000]
+    subgraph "GitHub Actions"
+        Timer[worker.yml cron<br/>12:00 KST daily] --> Worker
+        Worker[worker/runOnce.js] -->|spawns| CCLI["Claude Code CLI<br/>(subscription OAuth)"]
         Worker -->|analyses + recommendations| FS
     end
-
-    AID -->|spawns| CCLI["Claude Code CLI<br/>(user subscription)"]
 
     CF -->|fixtures| FD["football-data.org"]
     CR -->|results| FD
@@ -136,8 +139,8 @@ graph TD
 | Firebase Hosting | Static SPA (`index.html` + Tailwind CDN) |
 | Firestore | Matches, picks, stats, recommendations |
 | Cloud Functions | Fixture cron, result cron, Telegram notifier |
-| VPS systemd | Daily AI analysis (24h window) |
-| ai-debate bridge | Claude Code CLI under user subscription |
+| GitHub Actions | Daily AI analysis (24h window) + deploy |
+| Claude Code CLI | Headless analysis under user subscription |
 | football-data.org | Fixtures, results, standings, recent matches, H2H |
 | The Odds API | Live bookmaker odds (1X2 + totals) |
 
@@ -149,10 +152,11 @@ graph TD
 Phase 1 ✅                  Phase 2 🔄                  Phase 3 🔲
 ──────────────────          ──────────────────          ──────────────────
 ✅ EPL fixture analysis     ✅ Telegram alerts           🔲 User accounts
-✅ Value pick engine        🔄 Historical pick archive   🔲 Custom thresholds
-✅ Track record stats       🔲 Multi-league support      🔲 Mobile PWA
-✅ De-vigged fair edge      🔲 Confidence calibration    🔲 Home screen widget
-✅ Bilingual reasoning      🔲 Per-run failure alert
+✅ Value pick engine        ✅ Per-run failure alert     🔲 Custom thresholds
+✅ Track record stats       🔄 Analysis engine v2        🔲 Mobile PWA
+✅ De-vigged fair edge         (market-anchored + CLV)   🔲 Home screen widget
+✅ Bilingual reasoning      🔲 Multi-league support
+✅ Serverless (no VPS)      🔲 Confidence calibration
 ```
 
 | Phase | Status | Target |

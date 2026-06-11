@@ -59,11 +59,11 @@ Tone: concise and confident, no excessive promotional language.
 ## Project overview
 
 TotoLab is a single-page web app that surfaces value bets on upcoming
-EPL fixtures. The analysis pipeline runs on a VPS via systemd, calls
-Claude through the [ai-debate](https://github.com/.../ai-debate) bridge
-(Claude Code CLI under the user's subscription, $0 in API spend), and
-writes structured analysis to Firestore. The frontend reads Firestore
-directly and renders picks, match cards, and a track-record dashboard.
+EPL fixtures. The analysis pipeline runs as a GitHub Actions cron job
+that spawns the Claude Code CLI headlessly (subscription OAuth auth,
+$0 in API spend) and writes structured analysis to Firestore. The
+frontend reads Firestore directly and renders picks, match cards, and
+a track-record dashboard.
 
 ## Folder structure
 
@@ -77,22 +77,18 @@ toto-lab/
 ├── OPERATIONS.md            # Day-to-day runbook (Korean)
 ├── README.md
 ├── ideas/                   # Feature idea drafts
-├── infra/                   # systemd units + deploy.sh (VPS-side, mirrored to git)
-│   ├── systemd/
-│   │   ├── totolab-worker.timer
-│   │   ├── totolab-worker.service
-│   │   └── ai-debate.service
-│   ├── deploy.sh
-│   └── README.md
+├── .github/workflows/
+│   ├── worker.yml           # Daily analysis cron (12:00 KST) + manual dispatch
+│   └── deploy.yml           # firebase deploy on push to main
 ├── functions/               # Cloud Functions — fixtures, results, Telegram notifier
 │   ├── index.js
 │   ├── footballData.js      # football-data.org API wrapper
 │   ├── oddsApi.js           # The Odds API wrapper (also used by worker)
 │   └── devig.js             # de-vig math (also used by worker)
-└── worker/                  # VPS analysis runner
-    ├── runOnce.js           # systemd entrypoint
+└── worker/                  # Analysis runner (GitHub Actions)
+    ├── runOnce.js           # entrypoint
     ├── pipeline.js          # orchestrates fan-out + recommendations
-    ├── analyzer.js          # ai-debate /api/analyze wrapper
+    ├── analyzer.js          # headless Claude Code CLI wrapper
     └── firestore.js         # Firebase Admin SDK init
 ```
 
@@ -102,9 +98,10 @@ toto-lab/
 |---|---|---|
 | Fixture collection (next 7 days) | Cloud Functions | cron 06:00 KST daily |
 | Result collection | Cloud Functions | cron 09:00 KST daily + 23:00 Sat/Sun |
-| Match analysis (next 24h) | VPS worker (systemd) | timer 12:00 KST daily |
+| Match analysis (next 24h) | GitHub Actions (`worker.yml`) | cron 12:00 KST daily + manual dispatch |
 | Telegram alert on new picks | Cloud Functions | Firestore trigger on `recommendations/current` |
-| Static site | Firebase Hosting | git push → CI |
+| Worker failure alert | GitHub Actions (`worker.yml`) | Telegram message on failed run |
+| Static site + Functions deploy | GitHub Actions (`deploy.yml`) | push to `main` |
 
 ## Build and run
 
@@ -116,25 +113,32 @@ firebase deploy
 firebase deploy --only functions
 firebase deploy --only hosting
 
-# Worker (manual run on the VPS)
+# Worker (manual local run — needs a logged-in `claude` CLI)
 cd worker && npm install
 node runOnce.js          # default 24h window
 node runOnce.js 48       # override window for one-off
 ```
 
+The scheduled worker runs in GitHub Actions; trigger it manually via
+Actions → "Daily analysis worker" → Run workflow (horizon input).
+
 Required environment variables:
 
 | Var | Where | Used by |
 |---|---|---|
-| `FOOTBALL_DATA_TOKEN` | `functions/.env`, `worker/.env` | both |
-| `ODDS_API_KEY` | `worker/.env` | worker |
-| `ADMIN_TOKEN` | `functions/.env` | manual HTTP endpoints |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Functions runtime config | notifier |
-| `AI_DEBATE_URL` (default `http://localhost:3000`) | systemd unit | worker |
-| `AI_DEBATE_MODEL` (default `claude-sonnet-4-6`) | systemd unit | worker |
-| `GOOGLE_APPLICATION_CREDENTIALS` | systemd unit | worker (Firestore Admin) |
+| `FOOTBALL_DATA_TOKEN` | `functions/.env` + Actions secret | both |
+| `ODDS_API_KEY` | Actions secret (`worker`), `functions/.env` | worker |
+| `ADMIN_TOKEN` | `functions/.env` + Actions secret | manual HTTP endpoints |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | `functions/.env` + Actions secrets | notifier, worker failure alert |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Actions secret | worker (Claude CLI auth in CI) |
+| `CLAUDE_MODEL` (default `claude-sonnet-4-6`) | optional env | worker |
+| `FIREBASE_SERVICE_ACCOUNT` | Actions secret (JSON) | worker (Firestore Admin) |
+| `FIREBASE_TOKEN` | Actions secret | `deploy.yml` (firebase-tools auth) |
 
-No Anthropic API key — the worker reaches Claude through ai-debate.
+`functions/.env` is gitignored; `deploy.yml` recreates it from Actions
+secrets at deploy time (firebase-tools bakes it into the Functions
+runtime). No Anthropic API key anywhere — the worker spawns the Claude
+Code CLI under the user's subscription.
 
 ## Screens
 
@@ -154,11 +158,11 @@ Single-page app (`index.html`):
 | Hosting | Firebase Hosting |
 | Database | Firestore |
 | Cloud jobs | Firebase Functions (Node 22, ESM) |
-| Analysis runtime | Node 22 on Contabo VPS via systemd |
-| AI | Claude Sonnet 4.6 via ai-debate bridge (Claude Code CLI) |
+| Analysis runtime | Node 22 on GitHub Actions (`ubuntu-latest`) |
+| AI | Claude Sonnet 4.6 via headless Claude Code CLI (subscription OAuth) |
 | Data — Fixtures | football-data.org API v4 |
 | Data — Odds | The Odds API v4 |
-| CI/CD | GitHub Actions self-hosted runner on the VPS |
+| CI/CD | GitHub Actions (GitHub-hosted runners) |
 
 ## Key conventions
 
@@ -171,8 +175,8 @@ Single-page app (`index.html`):
   `CONFIDENCE_THRESHOLD = 50`, `SECONDARY_CONFIDENCE_MIN = 40`,
   `MAX_PICKS = 3`.
 - Injury data is fetched live by `worker/analyzer.js#fetchTeamInjuries`
-  via WebSearch through the ai-debate bridge — no pre-uploaded
-  Firestore collection is read.
+  via the Claude CLI's WebSearch tool — no pre-uploaded Firestore
+  collection is read.
 - `ARSENAL_TEAM_ID = 57` (in `worker/pipeline.js`) is the hardcoded
   fan-team flag — sets `isFanTeam: true` on Arsenal matches so the
   prompt enforces strict data-only reasoning.
@@ -193,18 +197,23 @@ Single-page app (`index.html`):
 
 ## Operational gotchas
 
-- Worker depends on `ai-debate.service` being up. The systemd unit uses
-  `Wants=ai-debate.service` (soft) intentionally — see
-  [`infra/README.md`](infra/README.md) for why this matters.
-- `Persistent=true` on the timer means a missed firing (e.g., VPS
-  reboot) runs immediately on next start. Usually fine.
+- GitHub Actions cron can drift 15–30 min under load — fine for a
+  daily noon job, but don't expect to-the-minute firing.
+- `CLAUDE_CODE_OAUTH_TOKEN` (Actions secret) is a long-lived token from
+  `claude setup-token`. If worker runs start failing with auth errors,
+  regenerate it locally and update the secret.
+- `analyzer.js` spawns the CLI with `cwd` set to a temp dir on purpose —
+  otherwise the CLI auto-discovers this repo's CLAUDE.md and pollutes
+  the analysis context with project work rules.
 - Cloud Functions `collectResults` skips already-recorded matches; the
   worker does not look at result data at all.
 
 ## Future features
 
-### Must do
-- Per-run failure alert via Telegram (`OnFailure=` systemd handler)
+### Must do (off-season 2026 rebuild — see memory)
+- Analysis engine v2: market-anchored probabilities (de-vigged sharp
+  prior + evidence-backed deltas), draw-probability guard, no pick
+  without stored odds, O/U push handling, CLV tracking
 
 ### Nice to have
 - Multi-league support (La Liga, Bundesliga)
