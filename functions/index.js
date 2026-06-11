@@ -396,11 +396,10 @@ async function runCollectBetmanOdds() {
 }
 
 // Daily 11:30 KST — 30 min before the analysis worker, so picks can carry
-// Betman prices and deadlines.
-// TEMP: running every 10 min to validate Betman access from the Seoul
-// GCF egress IP; revert to "30 11 * * *" once stats/betman shows ok.
+// Betman prices and deadlines. (Seoul-IP access to Betman verified live
+// 2026-06-12: stats/betman heartbeat ok:true.)
 export const collectBetmanOdds = onSchedule(
-  { schedule: "*/10 * * * *", timeZone: "Asia/Seoul", timeoutSeconds: 120 },
+  { schedule: "30 11 * * *", timeZone: "Asia/Seoul", timeoutSeconds: 120 },
   runCollectBetmanOdds
 );
 
