@@ -11,7 +11,9 @@ All times KST.
 ```
 06:00 daily          collectFixtures        Cloud Functions     pull next 7 days of EPL fixtures
 12:00 daily          worker.yml             GitHub Actions      re-analyze every match in next 24h
-09:00 daily          collectResults         Cloud Functions     mark won/lost on finished matches
+19:00-05:30 KST      closing.yml            GitHub Actions      snapshot closing odds (30min cadence,
+  (10:00-20:30 UTC)                                             only acts when kickoff < 75min away)
+09:00 daily          collectResults         Cloud Functions     settle picks, compute CLV, update stats
 23:00 Sat & Sun      collectResultsSatNight Cloud Functions     pick up evening results same night
                      collectResultsSunNight
 ```
@@ -38,6 +40,7 @@ noon job that's irrelevant.
 | Fixtures + results crons | Firebase Cloud Functions (asia-northeast3) | see `functions/index.js` |
 | Telegram notifier | Firebase Cloud Functions (Firestore trigger) | fires when `recommendations/current` changes |
 | Daily analysis | GitHub Actions (`.github/workflows/worker.yml`) | `ubuntu-latest`, headless Claude Code CLI |
+| Closing-odds snapshot | GitHub Actions (`.github/workflows/closing.yml`) | feeds CLV; no AI involved |
 | Deploy | GitHub Actions (`.github/workflows/deploy.yml`) | on push to `main` |
 
 No servers. The repo is public, so Actions minutes are free and
