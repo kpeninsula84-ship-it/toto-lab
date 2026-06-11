@@ -26,9 +26,9 @@ AI-powered EPL betting analysis — value picks updated daily.
 - Bilingual reasoning (English + Korean) on each match card
 
 ### Value Pick Engine
-- Filters by configurable thresholds (Edge ≥ 5% on fair price, Confidence ≥ 50)
-- Up to 3 strong picks plus a secondary tier (Confidence 40–49)
-- Acca odds calculated when ≥ 2 picks pass
+- Market-anchored: the model adjusts de-vigged sharp probabilities with small evidence-backed deltas — it never invents probabilities
+- Filters by configurable thresholds (Edge ≥ 5% on fair price, Confidence ≥ 50); up to 3 picks
+- Acca odds calculated when ≥ 2 picks pass; Betman (프로토) execution price, EV, and sale deadline shown in Korean mode
 
 ### Track Record Dashboard
 - Win rate, P&L (£10 flat stake), and ROI tracked automatically
@@ -116,11 +116,14 @@ curl -H "x-admin-token: $ADMIN_TOKEN" \
 graph TD
     User["Browser (Tailwind SPA)"] -->|reads| FS[(Firestore)]
 
-    subgraph "Cloud Functions"
+    subgraph "Cloud Functions (Seoul)"
         CF[collectFixtures] -->|writes matches| FS
-        CR[collectResults x3 cron] -->|results + stats| FS
+        CB[collectBetmanOdds<br/>11:30 KST] -->|프로토 odds + deadlines| FS
+        CR[collectResults x3 cron] -->|results + CLV + stats| FS
         TG[notifyTelegram] -.->|trigger on recommendations/current| TGAPI((Telegram))
     end
+
+    CB -->|JSON POST| BM["Betman (스포츠토토)"]
 
     subgraph "GitHub Actions"
         Timer[worker.yml cron<br/>12:00 KST daily] --> Worker
@@ -162,8 +165,8 @@ Phase 1 ✅                  Phase 2 🔄                  Phase 3 🔲
 | Phase | Status | Target |
 |---|---|---|
 | Phase 1 — Core EPL analysis | Complete | 2025 Q4 |
-| Phase 2 — Alerts & history | In progress | 2026 Q2 |
-| Phase 3 — User features | Planned | 2026 Q3 |
+| Phase 2 — Engine v2, CLV, Betman, failure alerts | Complete | 2026 Q2 |
+| Phase 3 — Paper-trading validation, then user features | 2026-27 season | 2026 Q3+ |
 
 ---
 

@@ -114,10 +114,25 @@ function selectPick(analysis, fairProbs) {
     : { pick: null, edgeFair };
 }
 
+// Betman snapshot freshness guard: a match dropped from Betman's active
+// rounds keeps its last-written betman field forever — never surface a
+// price older than ~a day or whose sale deadline has passed.
+const BETMAN_STALE_MS = 26 * 3600_000;
+
+function freshBetman(m) {
+  const b = m.betman;
+  if (!b) return null;
+  const updated = b.updatedAt?.toMillis ? b.updatedAt.toMillis() : null;
+  if (updated == null || Date.now() - updated > BETMAN_STALE_MS) return null;
+  const deadline = b.deadline?.toMillis ? b.deadline.toMillis() : null;
+  if (deadline != null && deadline < Date.now()) return null;
+  return b;
+}
+
 // Betman (프로토) price for the pick, from the betman snapshot the Seoul
 // Cloud Function attaches to match docs. O/U only at the matching line.
 function getBetmanPriceForPick(m) {
-  const b = m.betman;
+  const b = freshBetman(m);
   if (!b || !m.pick) return null;
   if (m.pick === "home" || m.pick === "draw" || m.pick === "away") {
     return b.matchWinner?.[m.pick] ?? null;
@@ -339,7 +354,7 @@ export async function computeAndSaveRecommendations() {
       score: Math.round(ev * Math.sqrt(conf / 100) * 100) / 100,
       betmanOdds,
       betmanEv,
-      betmanDeadline: m.betman?.deadline ?? null,
+      betmanDeadline: betmanOdds != null ? (freshBetman(m)?.deadline ?? null) : null,
       minOdds,
     };
 

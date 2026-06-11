@@ -12,8 +12,8 @@ All times KST.
 06:00 daily          collectFixtures        Cloud Functions     pull next 7 days of EPL fixtures
 11:30 daily          collectBetmanOdds      Cloud Functions     Betman 프로토 odds + deadlines onto match docs
 12:00 daily          worker.yml             GitHub Actions      re-analyze every match in next 24h
-19:00-05:30 KST      closing.yml            GitHub Actions      snapshot closing odds (30min cadence,
-  (10:00-20:30 UTC)                                             only acts when kickoff < 75min away)
+19:00-06:30 KST      closing.yml            GitHub Actions      snapshot closing odds (30min cadence,
+  (10:00-21:30 UTC)                                             only acts when kickoff < 75min away)
 09:00 daily          collectResults         Cloud Functions     settle picks, compute CLV, update stats
 23:00 Sat & Sun      collectResultsSatNight Cloud Functions     pick up evening results same night
                      collectResultsSunNight
@@ -137,9 +137,10 @@ Open the linked Actions run. Common causes:
 
 ### Analysis succeeded but no value picks shown on the site
 
-Picks are surfaced only when `edgeFair >= 5%` AND `confidence >= 50`
-(strong) or `confidence >= 40` (secondary). It's normal for a slate to
-produce zero picks; the site shows match cards regardless.
+Picks are surfaced only when `edgeFair >= 5%` AND `confidence >= 50`.
+Under engine v2 this is rare by design — most slates should produce
+zero picks (all-zero deltas = the market is right). The site shows
+match cards regardless.
 
 ### `collectFixtures` or `collectResults` cron didn't run
 

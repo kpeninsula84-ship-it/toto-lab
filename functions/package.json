@@ -1,6 +1,6 @@
 {
   "name": "toto-lab-functions",
-  "description": "TotoLab Cloud Functions - data collection (fixtures, odds, results), manual injury upload, Telegram notifications. AI analysis runs on the VPS-side worker via the ai-debate bridge.",
+  "description": "TotoLab Cloud Functions - data collection (fixtures, results), Betman odds + deadlines, Telegram notifications. AI analysis runs on GitHub Actions via the headless Claude Code CLI.",
   "engines": {
     "node": "22"
   },

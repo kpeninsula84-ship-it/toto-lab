@@ -80,7 +80,11 @@ export async function fetchRoundGames(gmTs, gameYear) {
 function isEplRow(row) {
   if (row.itemCode !== "SC") return false;
   const league = `${row.leagueName ?? ""} ${row.leagueShortName ?? ""}`;
-  return /프리미어|EPL/i.test(league) && /잉글|프리미어/.test(league);
+  if (/EPL/i.test(league)) return true;
+  // "프리미어" alone would also match 러시아 프리미어리그 — require 잉글.
+  // If Betman's real EPL naming differs, every soccer league on sale is
+  // logged in the stats/betman heartbeat for correction.
+  return league.includes("프리미어") && league.includes("잉글");
 }
 
 // Each fixture appears as several rows (one per bet type). Verified
@@ -112,17 +116,22 @@ export function groupEplFixtures(rows, filter = isEplRow) {
       fixtures.set(key, {
         homeName: row.homeName,
         awayName: row.awayName,
-        gameDate: row.gameDate, // epoch ms (KST wall-clock based)
-        deadline: row.endDate ?? null, // per-match sale deadline, epoch ms
+        // True UTC epoch ms — verified live: round endDate 14:00Z closed
+        // at exactly 23:00 KST. Safe to compare with football-data utcDate.
+        gameDate: row.gameDate,
+        deadline: null, // per-match sale deadline, epoch ms
         leagueName: row.leagueName,
         matchWinner: null,
         overUnder: [],
       });
     }
     const fx = fixtures.get(key);
-    if (row.endDate && (!fx.deadline || row.endDate < fx.deadline)) fx.deadline = row.endDate;
-
     const type = classifyRow(row);
+    // Deadline only from the markets we actually surface — a special
+    // market with an earlier close must not shrink the shown deadline.
+    if (type !== "other" && row.endDate && (!fx.deadline || row.endDate < fx.deadline)) {
+      fx.deadline = row.endDate;
+    }
     if (type === "matchWinner" && !fx.matchWinner) {
       fx.matchWinner = {
         home: Number(row.winAllot) || null,

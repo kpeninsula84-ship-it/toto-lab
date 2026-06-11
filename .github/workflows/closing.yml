@@ -2,11 +2,11 @@ name: Closing odds snapshot
 
 on:
   schedule:
-    # Every 30 min during EPL kickoff hours (10:00-20:30 UTC covers
-    # lunchtime through evening kickoffs incl. midweek). Each firing
-    # makes at most ONE Odds API call, and zero when no match kicks
-    # off within the next 75 minutes.
-    - cron: "*/30 10-20 * * *"
+    # Every 30 min during EPL kickoff hours (10:00-21:30 UTC covers
+    # lunchtime through late evening kickoffs incl. midweek and
+    # rescheduled slots). Each firing makes at most ONE Odds API call,
+    # and zero when no match kicks off within the next 75 minutes.
+    - cron: "*/30 10-21 * * *"
   workflow_dispatch: {}
 
 permissions:
