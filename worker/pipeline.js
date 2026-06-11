@@ -1,4 +1,4 @@
-// Analysis pipeline — runs daily at 12:00 KST on the VPS via systemd timer.
+// Analysis pipeline — runs daily at 12:00 KST on GitHub Actions (worker.yml).
 // Re-analyzes every EPL match kicking off in the next 24 hours, so each
 // run picks up the freshest injury, odds, and form data.
 //
@@ -246,7 +246,7 @@ export async function computeAndSaveRecommendations() {
     secondaryPicks,
     comboOdds: picks.length >= 2 ? Number(comboOdds.toFixed(2)) : null,
     threshold: { edge: EDGE_THRESHOLD, confidence: CONFIDENCE_THRESHOLD, edgeBasis: "fair_devigged" },
-    backend: "ai-debate",
+    backend: "claude-cli",
   };
 
   await db.collection("recommendations").doc("current").set(payload);

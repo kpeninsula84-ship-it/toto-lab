@@ -1,38 +1,99 @@
-// Match analyzer using the ai-debate bridge instead of the Anthropic SDK.
-// The bridge spawns Claude Code CLI under the user's subscription, so this
-// path costs zero in API spend.
-//
-// Drop-in replacement for functions/analyzer.js's analyzeMatch() and
-// fetchTeamInjuries(). Same input/output shape; the rest of the pipeline
-// does not need to know which backend produced the analysis.
+// Match analyzer that invokes the Claude Code CLI directly in headless
+// (-p) mode, authenticated with CLAUDE_CODE_OAUTH_TOKEN under the user's
+// subscription — zero Anthropic API spend. Runs on GitHub Actions.
 
-const AI_DEBATE_URL = process.env.AI_DEBATE_URL || "http://localhost:3000";
-const MODEL = process.env.AI_DEBATE_MODEL || "claude-sonnet-4-6";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
 
-async function bridgeAnalyze({ systemPrompt, userPrompt, tools }) {
-  const body = { systemPrompt, userPrompt, model: MODEL };
-  if (tools && tools.length > 0) body.tools = tools;
-  const res = await fetch(`${AI_DEBATE_URL}/api/analyze`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
+const CALL_TIMEOUT_MS = 10 * 60 * 1000;
+
+function runClaude({ prompt, tools }) {
+  const args = [
+    "-p",
+    "--output-format", "json",
+    "--model", MODEL,
+    "--no-session-persistence",
+    "--strict-mcp-config",
+  ];
+  if (tools && tools.length > 0) args.push("--allowedTools", tools.join(","));
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(CLAUDE_BIN, args, {
+      // Neutral cwd so the CLI doesn't auto-discover this repo's CLAUDE.md
+      // (project work rules would pollute the analysis context).
+      cwd: tmpdir(),
+      // claude is a .cmd shim on Windows; argv stays shell-safe because the
+      // prompt goes through stdin and every arg is a plain token.
+      shell: process.platform === "win32",
+    });
+
+    let out = "";
+    let errBuf = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`claude CLI timed out after ${CALL_TIMEOUT_MS / 1000}s`));
+    }, CALL_TIMEOUT_MS);
+
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (errBuf += d));
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        return reject(new Error(`claude CLI exit ${code}: ${(errBuf || out).slice(0, 500)}`));
+      }
+      resolve(out);
+    });
+
+    child.stdin.write(prompt);
+    child.stdin.end();
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`ai-debate ${res.status}: ${text}`);
+}
+
+function extractJson(text) {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) {
+    throw new Error(`no JSON object in model output: ${text.slice(0, 200)}`);
   }
-  return res.json(); // { data, usage }
+  return JSON.parse(text.slice(start, end + 1));
+}
+
+async function claudeAnalyze({ systemPrompt, userPrompt, tools }) {
+  // -p mode takes a single prompt; fold the system prompt into it.
+  const prompt = `${systemPrompt}\n\n=====\n\n${userPrompt}`;
+  const raw = await runClaude({ prompt, tools });
+  const envelope = JSON.parse(raw); // { type, is_error, result, usage, ... }
+  if (envelope.is_error) {
+    throw new Error(`claude CLI error result: ${String(envelope.result).slice(0, 300)}`);
+  }
+  const data = extractJson(envelope.result ?? "");
+  return { data, usage: envelope.usage ?? {} };
+}
+
+// EPL seasons run Aug–May: from July onwards we're preparing for the
+// season starting that year, otherwise we're inside the season that
+// started the previous year.
+function currentSeasonLabel(now = new Date()) {
+  const y = now.getFullYear();
+  const startYear = now.getMonth() >= 6 ? y : y - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
 }
 
 export async function fetchTeamInjuries(teamName) {
   const systemPrompt = `You are a football injury data extractor. Use the WebSearch tool to find current injury and suspension news for the given Premier League team. Only return players whose absence/doubt would meaningfully affect a match outcome (top scorers, key defenders, creative midfielders).`;
-  const userPrompt = `Search the web for the most recent (last 7 days) injury and suspension status for "${teamName}" in the Premier League 2025-26 season.
+  const userPrompt = `Search the web for the most recent (last 7 days) injury and suspension status for "${teamName}" in the Premier League ${currentSeasonLabel()} season.
 
 Return ONLY this JSON shape (no prose, no fences):
 {"out":["Player Name (reason)"],"doubtful":["Player Name (reason)"]}`;
 
   try {
-    const { data, usage } = await bridgeAnalyze({
+    const { data, usage } = await claudeAnalyze({
       systemPrompt,
       userPrompt,
       tools: ["WebSearch"],
@@ -151,11 +212,11 @@ ${JSON.stringify(d.h2h)}
 Return JSON only.`;
 }
 
-// Drop-in for functions/analyzer.js's analyzeMatch().
-// Same input/output shape; tokens come from the bridge usage payload.
+// Same input/output shape as the old ai-debate-bridge version; tokens come
+// from the CLI result envelope.
 export async function analyzeMatch(data) {
   const ouLine = data.odds?.overUnder?.line ?? 2.5;
-  const { data: prediction, usage } = await bridgeAnalyze({
+  const { data: prediction, usage } = await claudeAnalyze({
     systemPrompt: buildSystemPrompt(ouLine),
     userPrompt: buildUserPrompt(data),
   });
@@ -176,7 +237,7 @@ export async function analyzeMatch(data) {
     isFanTeam: data.isFanTeam || false,
     odds: data.odds || null,
     model: MODEL,
-    backend: "ai-debate",
+    backend: "claude-cli",
     tokens: {
       input: usage?.input_tokens ?? 0,
       output: usage?.output_tokens ?? 0,

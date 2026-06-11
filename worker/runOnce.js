@@ -1,5 +1,6 @@
-// VPS systemd timer entrypoint. Re-analyzes every EPL match kicking off
-// in the next 24 hours via the ai-debate bridge.
+// GitHub Actions cron entrypoint (.github/workflows/worker.yml).
+// Re-analyzes every EPL match kicking off in the next 24 hours by calling
+// the Claude Code CLI headlessly (subscription auth, no API spend).
 //
 // Fixture collection and result collection run in Cloud Functions.
 //

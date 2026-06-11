@@ -5,17 +5,47 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-toto-lab
   cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: [self-hosted, vps]
-    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Run deploy.sh on the VPS
-        # deploy.sh handles git pull, conditional npm install (functions/worker),
-        # and `firebase deploy`. Worker code on disk is picked up by the next
-        # totolab-worker.timer firing automatically.
-        run: /root/deploy.sh toto-lab
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # functions/.env is gitignored but firebase-tools bakes it into the
+      # deployed functions' runtime env — recreate it from Actions secrets.
+      - name: Write functions/.env
+        env:
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          {
+            echo "FOOTBALL_DATA_TOKEN=$FOOTBALL_DATA_TOKEN"
+            echo "ODDS_API_KEY=$ODDS_API_KEY"
+            echo "ADMIN_TOKEN=$ADMIN_TOKEN"
+            echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
+            echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
+          } > functions/.env
+
+      - name: Install functions dependencies
+        working-directory: functions
+        run: npm ci
+
+      - name: Deploy to Firebase
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: npx firebase-tools@14 deploy --non-interactive --force
