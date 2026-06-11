@@ -10,7 +10,6 @@ import { db } from "./firestore.js";
 import {
   getTeamRecentMatches,
   getTeamUpcomingFixtures,
-  getHeadToHead,
   getStandings,
 } from "../functions/footballData.js";
 import { getEPLOdds, getEPLTeamTotals, findOddsForMatch } from "../functions/oddsApi.js";
@@ -39,11 +38,15 @@ function getOddsForPick(match) {
 function getProbForPick(match) {
   const { pick } = match;
   if (!pick) return null;
-  if (pick === "home") return match.probs?.home ?? null;
-  if (pick === "draw") return match.probs?.draw ?? null;
-  if (pick === "away") return match.probs?.away ?? null;
-  if (pick === "over") return match.overUnder?.over ?? null;
-  if (pick === "under") return match.overUnder?.under ?? null;
+  // Prefer fractional probabilities (engine v2) — integer rounding adds
+  // ±1pp noise right on the edge threshold.
+  const probs = match.probsExact ?? match.probs;
+  const ou = match.overUnderExact ?? match.overUnder;
+  if (pick === "home") return probs?.home ?? null;
+  if (pick === "draw") return probs?.draw ?? null;
+  if (pick === "away") return probs?.away ?? null;
+  if (pick === "over") return ou?.over ?? null;
+  if (pick === "under") return ou?.under ?? null;
   return null;
 }
 
@@ -61,15 +64,55 @@ function getFairProbForPick(match) {
 function computeFairProbs(odds) {
   if (!odds) return null;
   const sharpMW = odds.fair?.matchWinner ?? odds.market?.matchWinner ?? odds.matchWinner ?? null;
-  const sharpTotals = odds.fair?.totals?.best ?? odds.market?.totals?.best ?? odds.overUnder ?? null;
   const out = {};
   const mw = sharpMW ? devigMatchWinner(sharpMW, "power") : null;
   if (mw) out.matchWinner = mw;
-  if (sharpTotals?.over && sharpTotals?.under) {
-    const tw = devigTwoWay(sharpTotals.over, sharpTotals.under, "shin");
-    if (tw) out.overUnder = { line: sharpTotals.line, over: tw[0], under: tw[1] };
+
+  // O/U: de-vig at the SAME line as the market's chosen (most balanced)
+  // line so the baseline, the model output, and the execution price all
+  // refer to one line. Prefer the sharp book's price at that line; fall
+  // back to de-vigging the market book's own price.
+  const ouRef = odds.overUnder ?? odds.market?.totals?.best ?? null;
+  if (ouRef?.over && ouRef?.under && ouRef.line != null) {
+    const sharpAt =
+      (odds.fair?.totals?.all ?? []).find((l) => l.line === ouRef.line) ??
+      (odds.fair?.totals?.best?.line === ouRef.line ? odds.fair.totals.best : null);
+    const src = sharpAt ?? ouRef;
+    const tw = devigTwoWay(src.over, src.under, "shin");
+    if (tw) out.overUnder = { line: ouRef.line, over: tw[0], under: tw[1] };
   }
   return Object.keys(out).length ? out : null;
+}
+
+// Pick = outcome with the largest model-vs-fair edge among outcomes that
+// have an execution price; null when the best edge is under threshold.
+function selectPick(analysis, fairProbs) {
+  const candidates = [];
+  const probs = analysis.probsExact ?? analysis.probs;
+  const ou = analysis.overUnderExact ?? analysis.overUnder;
+  if (probs && fairProbs?.matchWinner) {
+    for (const k of ["home", "draw", "away"]) {
+      const fair = fairProbs.matchWinner[k];
+      const price = getOddsForPick({ pick: k, odds: analysis.odds });
+      if (fair == null || price == null) continue;
+      candidates.push({ pick: k, edge: probs[k] - fair * 100 });
+    }
+  }
+  if (ou && fairProbs?.overUnder) {
+    for (const k of ["over", "under"]) {
+      const fair = fairProbs.overUnder[k];
+      const price = getOddsForPick({ pick: k, odds: analysis.odds });
+      if (fair == null || price == null) continue;
+      candidates.push({ pick: k, edge: ou[k] - fair * 100 });
+    }
+  }
+  if (!candidates.length) return { pick: null, edgeFair: null };
+  candidates.sort((a, b) => b.edge - a.edge);
+  const best = candidates[0];
+  const edgeFair = Math.round(best.edge * 10) / 10;
+  return best.edge >= EDGE_THRESHOLD
+    ? { pick: best.pick, edgeFair }
+    : { pick: null, edgeFair };
 }
 
 function pickLabel(pick, ouLine) {
@@ -83,13 +126,15 @@ function pickLabel(pick, ouLine) {
 
 // per-match analysis ---------------------------------------------------------
 async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
-  const [homeRecent, awayRecent, homeUpcoming, awayUpcoming, h2h, homeInjuries, awayInjuries] =
+  // H2H is no longer fetched — the market prices it better than the model
+  // can read it from 5 samples, and feeding it invited re-pricing of
+  // already-priced information.
+  const [homeRecent, awayRecent, homeUpcoming, awayUpcoming, homeInjuries, awayInjuries] =
     await Promise.all([
       getTeamRecentMatches(match.homeId, 5),
       getTeamRecentMatches(match.awayId, 5),
       getTeamUpcomingFixtures(match.homeId, 5),
       getTeamUpcomingFixtures(match.awayId, 5),
-      getHeadToHead(match.fixtureId, 5),
       fetchTeamInjuries(match.home),
       fetchTeamInjuries(match.away),
     ]);
@@ -100,6 +145,11 @@ async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
   const kickoffDate = match.kickoff.toDate();
   const hoursToKickoff = Math.round((kickoffDate.getTime() - Date.now()) / 3600_000);
 
+  // The fair baseline is computed BEFORE the model call — engine v2 hands
+  // it to Claude as the anchor and only accepts deltas against it.
+  const fairProbs = computeFairProbs(odds);
+  const fairSource = odds?.fair?.bookTitle || odds?.fair?.book || (odds ? "market book (no sharp)" : null);
+
   const analysis = await analyzeMatch({
     home: match.home,
     away: match.away,
@@ -109,39 +159,28 @@ async function runFullAnalysis(match, standings, oddsEvents, teamTotalsEvents) {
     awayRecent,
     homeUpcoming,
     awayUpcoming,
-    h2h,
     homeStanding,
     awayStanding,
     odds,
+    fairProbs,
+    fairSource,
     homeInjuries,
     awayInjuries,
     isFanTeam: match.homeId === ARSENAL_TEAM_ID || match.awayId === ARSENAL_TEAM_ID,
   });
 
   const injuriesSnapshot = { home: homeInjuries, away: awayInjuries };
-  const fairProbs = computeFairProbs(odds);
-  const fairSource = odds?.fair?.bookTitle || odds?.fair?.book || null;
-  const matchView = { ...analysis, fairProbs };
-  const fairProb = getFairProbForPick(matchView);
-  const pickProb = getProbForPick(matchView);
-  const edgeFair =
-    fairProb != null && pickProb != null
-      ? Math.round((pickProb - fairProb * 100) * 10) / 10
-      : null;
+  const { pick, edgeFair } = selectPick(analysis, fairProbs);
 
-  const result = { ...analysis, fairProbs, fairSource, edgeFair, injuriesSnapshot };
-
-  // A pick we can't price can't be staked or settled — last season three
-  // picks were graded with no stored odds, corrupting the track record.
-  if (result.pick && getOddsForPick(result) == null) {
-    console.log(
-      `[pipeline] ${match.home} vs ${match.away}: dropping pick "${result.pick}" — no stored odds for it`
-    );
-    result.pick = null;
-    result.pickDropped = "no_stored_odds";
-  }
-
-  return result;
+  return {
+    ...analysis,
+    fairProbs,
+    fairSource,
+    pick,
+    edge: edgeFair, // legacy field name kept for the frontend/stats
+    edgeFair,
+    injuriesSnapshot,
+  };
 }
 
 // main entry — analyze every SCHEDULED/TIMED match in the next horizon -------
@@ -181,7 +220,9 @@ export async function runScheduledAnalysis(horizonHours = DEFAULT_HORIZON_HOURS,
     try {
       console.log(`[${label}] analyzing ${m.home} vs ${m.away}`);
       const result = await runFullAnalysis(m, standings, oddsEvents, teamTotalsEvents);
-      await doc.ref.update({ ...result, analyzed: true, analyzedAt: Timestamp.now() });
+      // A skipped analysis (no odds yet) stays "pending" so the frontend
+      // doesn't render it as an analysed no-value match.
+      await doc.ref.update({ ...result, analyzed: !result.skipped, analyzedAt: Timestamp.now() });
     } catch (err) {
       console.error(`[${label}] failed: ${m.home} vs ${m.away} —`, err.message);
       await doc.ref.update({

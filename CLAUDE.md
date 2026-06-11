@@ -174,6 +174,15 @@ Single-page app (`index.html`):
 - Pick thresholds live in `worker/pipeline.js`: `EDGE_THRESHOLD = 5`,
   `CONFIDENCE_THRESHOLD = 50`, `SECONDARY_CONFIDENCE_MIN = 40`,
   `MAX_PICKS = 3`.
+- **Engine v2 is market-anchored**: the model never invents
+  probabilities. It returns deltas against the de-vigged fair baseline
+  (`MAX_MW_DELTA = 7`, `MAX_OU_DELTA = 6` in `worker/analyzer.js`);
+  out-of-range deltas are zeroed (not clamped), 1X2 deltas re-centered
+  to sum 0, the draw is floored at fair − 2pp, and a big delta with
+  confidence < 50 is discarded as self-contradictory. Pick = largest
+  model-vs-fair edge ≥ `EDGE_THRESHOLD` among priced outcomes, computed
+  on fractional probs (`probsExact`) in `selectPick`. Engine math is
+  unit-tested in `worker/v2math.test.mjs` (runs in `worker.yml`).
 - Injury data is fetched live by `worker/analyzer.js#fetchTeamInjuries`
   via the Claude CLI's WebSearch tool — no pre-uploaded Firestore
   collection is read.

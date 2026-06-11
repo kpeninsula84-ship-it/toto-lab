@@ -1,5 +1,15 @@
-// Match analyzer that invokes the Claude Code CLI directly in headless
-// (-p) mode, authenticated with CLAUDE_CODE_OAUTH_TOKEN under the user's
+// Market-anchored match analyzer (engine v2).
+//
+// The model does NOT invent probabilities. It receives de-vigged fair
+// probabilities from a sharp book as the baseline and returns small
+// evidence-backed DELTAS; code zeroes protocol-violating deltas,
+// re-centers 1X2 deltas to sum zero, enforces a draw floor, and keeps
+// fractional probabilities for pick selection. Rationale: last season
+// the free-form engine claimed 52% average probability on picks that
+// hit 22% — and 11 of 18 1X2 losses were draws it never picked.
+//
+// Claude is invoked via the Claude Code CLI in headless (-p) mode,
+// authenticated with CLAUDE_CODE_OAUTH_TOKEN under the user's
 // subscription — zero Anthropic API spend. Runs on GitHub Actions.
 
 import { spawn } from "node:child_process";
@@ -8,6 +18,15 @@ import { tmpdir } from "node:os";
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
 const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
 const CALL_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Delta limits (percentage points). MAX_MW_DELTA must stay above the
+// pick EDGE_THRESHOLD in pipeline.js or no pick can ever qualify.
+export const MAX_MW_DELTA = 7; // per 1X2 outcome
+export const MAX_OU_DELTA = 6; // on the Over side (Under mirrors)
+export const DRAW_FLOOR_SLACK = 2; // draw may end at most 2pp below market
+const BIG_DELTA = 5; // |delta| >= BIG_DELTA demands strong evidence/confidence
+
+// ── Claude CLI transport ─────────────────────────────────────────────────────
 
 function runClaude({ prompt, tools }) {
   const args = [
@@ -85,12 +104,14 @@ function currentSeasonLabel(now = new Date()) {
   return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
 }
 
+// ── Injuries ─────────────────────────────────────────────────────────────────
+
 export async function fetchTeamInjuries(teamName) {
-  const systemPrompt = `You are a football injury data extractor. Use the WebSearch tool to find current injury and suspension news for the given Premier League team. Only return players whose absence/doubt would meaningfully affect a match outcome (top scorers, key defenders, creative midfielders).`;
+  const systemPrompt = `You are a football injury data extractor. Use the WebSearch tool to find current injury and suspension news for the given Premier League team. Only return players whose absence/doubt would meaningfully affect a match outcome (top scorers, key defenders, creative midfielders). Always include HOW RECENT each report is — recency decides whether the betting market has already priced the news.`;
   const userPrompt = `Search the web for the most recent (last 7 days) injury and suspension status for "${teamName}" in the Premier League ${currentSeasonLabel()} season.
 
-Return ONLY this JSON shape (no prose, no fences):
-{"out":["Player Name (reason)"],"doubtful":["Player Name (reason)"]}`;
+Return ONLY this JSON shape (no prose, no fences). Append the report age to every entry:
+{"out":["Player Name (reason; reported N days ago)"],"doubtful":["Player Name (reason; reported N days ago)"]}`;
 
   try {
     const { data, usage } = await claudeAnalyze({
@@ -101,64 +122,195 @@ Return ONLY this JSON shape (no prose, no fences):
     return { ...data, _tokens: usage };
   } catch (err) {
     console.error(`[injuries] ${teamName} failed: ${err.message}`);
-    return { out: [], doubtful: [] };
+    // fetchFailed distinguishes "no injuries reported" from "we couldn't
+    // look" — the prompt tells the model to treat the squad as unknown.
+    return { out: [], doubtful: [], fetchFailed: true };
   }
 }
 
-function buildSystemPrompt(ouLine) {
+// ── Market-anchored post-processing ─────────────────────────────────────────
+
+function clamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+// Round fractional percentages to integers summing to 100
+// (largest-remainder method).
+export function roundToHundred(obj) {
+  const entries = Object.keys(obj).map((k) => ({
+    k,
+    floor: Math.floor(obj[k]),
+    rem: obj[k] - Math.floor(obj[k]),
+  }));
+  let leftover = 100 - entries.reduce((a, e) => a + e.floor, 0);
+  entries.sort((a, b) => b.rem - a.rem);
+  const out = {};
+  for (const e of entries) {
+    out[e.k] = e.floor + (leftover > 0 ? 1 : 0);
+    if (leftover > 0) leftover--;
+  }
+  return out;
+}
+
+// Protocol gate: out-of-range deltas are ZEROED (clamping would launder
+// delta inflation into a max-impact pick), and the 1X2 deltas are
+// re-centered to sum zero so renormalization can't dilute or amplify.
+export function sanitizeDeltas(rawDeltas = {}) {
+  const violations = [];
+  const d = {};
+  for (const k of ["home", "draw", "away", "over"]) {
+    const v = Number(rawDeltas?.[k]);
+    d[k] = Number.isFinite(v) ? v : 0;
+  }
+  for (const k of ["home", "draw", "away"]) {
+    if (Math.abs(d[k]) > MAX_MW_DELTA) {
+      violations.push(`deltas.${k}=${d[k]} exceeds ±${MAX_MW_DELTA} — zeroed`);
+      d[k] = 0;
+    }
+  }
+  if (Math.abs(d.over) > MAX_OU_DELTA) {
+    violations.push(`deltas.over=${d.over} exceeds ±${MAX_OU_DELTA} — zeroed`);
+    d.over = 0;
+  }
+  const resid = d.home + d.draw + d.away;
+  if (Math.abs(resid) > 1e-9) {
+    if (Math.abs(resid) > 3) {
+      violations.push(`1X2 deltas sum to ${resid} (must be 0) — re-centered`);
+    }
+    const shift = resid / 3;
+    for (const k of ["home", "draw", "away"]) {
+      d[k] = clamp(d[k] - shift, -MAX_MW_DELTA, MAX_MW_DELTA);
+    }
+  }
+  return { deltas: d, violations };
+}
+
+// fairProbs: { matchWinner?: {home,draw,away} fractions, overUnder?: {line,over,under} fractions }
+// rawDeltas: model output, percentage points.
+// Returns integer probs for display plus fractional *Exact variants for
+// pick selection (integer rounding adds ±1pp noise right on the edge
+// threshold).
+export function applyMarketAnchoredDeltas(fairProbs, rawDeltas = {}) {
+  const { deltas, violations } = sanitizeDeltas(rawDeltas);
+  const out = {
+    probs: null,
+    probsExact: null,
+    overUnder: null,
+    overUnderExact: null,
+    appliedDeltas: deltas,
+    violations,
+  };
+
+  const mw = fairProbs?.matchWinner;
+  if (mw?.home != null && mw?.draw != null && mw?.away != null) {
+    const base = { home: mw.home * 100, draw: mw.draw * 100, away: mw.away * 100 };
+    const adj = {
+      home: Math.max(base.home + deltas.home, 2),
+      draw: base.draw + deltas.draw,
+      away: Math.max(base.away + deltas.away, 2),
+    };
+    // Draw guard: LLMs systematically underrate EPL draws (~25% base rate).
+    const drawFloor = Math.max(base.draw - DRAW_FLOOR_SLACK, 2);
+    adj.draw = Math.max(adj.draw, drawFloor);
+
+    const scale = 100 / (adj.home + adj.draw + adj.away);
+    for (const k of ["home", "draw", "away"]) adj[k] *= scale;
+
+    // Scaling can push the draw back under its floor — re-assert it and
+    // take the deficit from home/away proportionally.
+    if (adj.draw < drawFloor) {
+      const deficit = drawFloor - adj.draw;
+      const ha = adj.home + adj.away;
+      adj.draw = drawFloor;
+      adj.home -= deficit * (adj.home / ha);
+      adj.away -= deficit * (adj.away / ha);
+    }
+
+    out.probsExact = { home: adj.home, draw: adj.draw, away: adj.away };
+    out.probs = roundToHundred(out.probsExact);
+  }
+
+  const ou = fairProbs?.overUnder;
+  if (ou?.over != null && ou?.under != null) {
+    const overExact = clamp(ou.over * 100 + deltas.over, 5, 95);
+    out.overUnderExact = { over: overExact, under: 100 - overExact };
+    const overInt = Math.round(overExact);
+    out.overUnder = { over: overInt, under: 100 - overInt };
+  }
+
+  return out;
+}
+
+function validateV2(prediction) {
+  if (!prediction || typeof prediction !== "object") {
+    throw new Error("v2 output is not an object");
+  }
+  const d = prediction.deltas;
+  if (!d || typeof d !== "object") {
+    throw new Error("v2 output missing deltas");
+  }
+  for (const k of ["home", "draw", "away", "over"]) {
+    if (d[k] != null && !Number.isFinite(Number(d[k]))) {
+      throw new Error(`v2 delta "${k}" is not numeric: ${JSON.stringify(d[k])}`);
+    }
+  }
+  const conf = Number(prediction.confidence);
+  if (!Number.isFinite(conf) || conf < 0 || conf > 100) {
+    throw new Error(`v2 confidence out of range: ${JSON.stringify(prediction.confidence)}`);
+  }
+  if (!Array.isArray(prediction.reasoning) || prediction.reasoning.length === 0) {
+    throw new Error("v2 output missing reasoning");
+  }
+}
+
+// ── Prompts ──────────────────────────────────────────────────────────────────
+
+function buildSystemPrompt(ouLine, fairSource) {
   return `You are a soccer betting analyst for the English Premier League.
 
 ⚠️ TIMING: This analysis runs ~12-36 hours before kickoff. Official STARTING LINEUPS are NOT yet available (announced 1h before match). DO NOT attempt to predict who starts.
 
+=== YOUR TASK: ADJUST THE MARKET, DON'T REPLACE IT ===
+You are given FAIR (de-vigged) probabilities from a sharp bookmaker (${fairSource ?? "market"}). Sharp EPL markets are highly efficient — table position, form, H2H, home advantage, and any team news older than ~72 hours are ALREADY in the price. Your only job is to judge whether the evidence below contains something the market may not have fully priced yet.
+
+On a typical slate, MOST matches should return all-zero deltas. An all-zero output with confidence 0 is a complete, correct, and common answer — it means the market is right. You are graded on calibration, not on finding edges.
+
+Output adjustments as DELTAS in percentage points:
+- deltas.home / deltas.draw / deltas.away: integers, each in [-${MAX_MW_DELTA}, +${MAX_MW_DELTA}], and they MUST sum to exactly 0. Outputs that break range or sum are DISCARDED, not clamped — a delta of +20 achieves nothing.
+- deltas.over: integer in [-${MAX_OU_DELTA}, +${MAX_OU_DELTA}] for the Over ${ouLine} side (Under mirrors automatically).
+- |delta| >= ${BIG_DELTA} requires exceptional, specific, RECENT evidence (e.g. 3+ first-XI players ruled out within the last 48h) AND confidence >= 50 — a big delta with low confidence is self-contradictory and will be discarded.
+- RECENCY RULE: news older than ~72h is priced. Only developments from roughly the last 24-48h can justify a delta.
+- DRAW DISCIPLINE: EPL matches end in draws ~25% of the time and models habitually underrate them. When you downgrade the stronger team, route at least ~40% of that probability mass to the DRAW, not all to the opponent — unless keyFactors cites concrete evidence the match will be open. A negative deltas.draw always requires explicit justification in keyFactors.
+
 === INJURY & SUSPENSION DATA ===
-Injury and suspension data is pre-fetched and provided in the prompt.
+Injury and suspension data is pre-fetched and provided in the prompt, with report age.
 Use it directly — do NOT search for additional injury info.
+If a team's injury section says DATA UNAVAILABLE, treat that squad's status as unknown: do NOT assume full strength, and avoid deltas that depend on that team's player availability.
 
 Classify each key player into EXACTLY ONE bucket based on provided data:
 - **OUT**: confirmed unavailable (long-term injury, suspension, ruled out)
 - **DOUBTFUL**: fitness uncertain, could play or not
 - **AVAILABLE**: expected to be in squad (don't assume starter)
 
-Only flag players important enough to move probabilities (top scorers, key defenders, creative midfielders).
+Assess IMPACT by position and backup quality, not mere absence. A widely-known long-term absence is already in the market price — it NEVER justifies a delta by itself; only fresh changes do.
 
-=== MANDATORY ANALYSIS CHECKS ===
+=== WHAT CAN LEGITIMATELY MOVE A DELTA ===
+1. Fresh team news (last 24-48h): new injuries/suspensions/returns the market may still be digesting.
+2. Schedule asymmetry: the computed SCHEDULE FACTS (rest days, congestion, big match within days after) — markets price these imperfectly.
+3. Confirmed heavy rotation signals (manager statements, dead-rubber dynamics).
+Standings, raw form, and H2H are PRICED — they may be cited only as supporting context for a delta caused by 1-3, never as its sole justification.
 
-1. **Recent match calendar (fatigue)**:
-   - Days since each team's last match.
-   - Recent CL/UEL/FA Cup/EFL Cup matches = midweek fatigue.
-   - A team with Tuesday CL has less rest than one with Saturday PL.
-
-2. **Upcoming fixtures (rotation risk)**:
-   - Major match (CL/UEL knockout) within 3-5 days AFTER → likely rotation.
-   - Title race vs mid-table teams prioritize differently.
-
-3. **Form momentum**: last 5 results weighted more than season total. Separate home/away form.
-
-4. **Head-to-head**: last 5 patterns (tight, high-scoring, venue dominance).
-
-5. **Bookmaker odds**: implied = 100 / decimal_odds. Edge = your_prob - implied.
-
-6. **Key player status**: assess IMPACT by position type, not just absence:
-   - Striker/playmaker OUT → significant only if no quality backup exists in squad
-   - Fullback OUT → check if versatile players (CB or MF) can cover adequately; if yes, reduce impact significantly
-   - Explicitly reason: "X is OUT but Y can cover at LB — limited impact" or "X is OUT with no adequate backup — attack weakened"
-   - Only apply probability penalty if backup quality is meaningfully lower than the starter
-
-=== OUTPUT RULES ===
-- 1X2 probabilities sum to 100. Over/Under ${ouLine} probabilities sum to 100.
-- Recommend pick ONLY if Edge > 5.
-- Confidence 0-100 (<40 = 'none', 60+ = strong signal).
-- If fan_team is true, STRICTLY data-driven.
-
-Reasoning array: 3-6 bullets. Include player status bucket if relevant (e.g., "Arsenal: Saka OUT (hamstring), Odegaard DOUBTFUL (knee)").
-reasoningKr: same bullets translated to Korean. Keep team names, player names, competition names, and numeric stats in English (e.g. "Arsenal: Saka OUT (hamstring)" → "Arsenal: Saka OUT (햄스트링)").
+=== OUTPUT ===
+confidence: 0-100 — strength of the EVIDENCE behind your deltas (0 = pure baseline / nothing notable, 60+ = strong specific evidence). It measures evidence quality, NOT delta size.
+keyFactors: one short string per non-zero delta naming its evidence and recency.
+reasoning: 3-6 bullets (EN), grounded in the data provided. Include player status buckets where relevant.
+reasoningKr: same bullets in Korean. Keep team/player/competition names and numeric stats in English (e.g. "Arsenal: Saka OUT (햄스트링)").
+If fan_team is true, STRICTLY data-driven.
 
 Output STRICT JSON matching this shape:
 {
-  "probs": {"home": int, "draw": int, "away": int},
-  "overUnder": {"over": int, "under": int},
-  "pick": "home|draw|away|over|under|none",
-  "edge": int,
+  "deltas": {"home": int, "draw": int, "away": int, "over": int},
+  "keyFactors": [string, ...],
   "confidence": int,
   "reasoning": [string, ...],
   "reasoningKr": [string, ...]
@@ -166,78 +318,182 @@ Output STRICT JSON matching this shape:
 No markdown, no extra prose.`;
 }
 
+function fmtInjuries(inj) {
+  if (inj?.fetchFailed) {
+    return "DATA UNAVAILABLE (fetch failed — treat squad status as unknown)";
+  }
+  const out = (inj?.out || []).join(", ") || "none reported";
+  const doubtful = (inj?.doubtful || []).join(", ") || "none reported";
+  return `OUT: ${out}\nDOUBTFUL: ${doubtful}`;
+}
+
+function pct(f) {
+  return `${(f * 100).toFixed(1)}%`;
+}
+
+function buildBaselineSection(d) {
+  const lines = [`=== MARKET BASELINE — fair (de-vigged) probabilities (${d.fairSource ?? "market"}) ===`];
+  const mw = d.fairProbs?.matchWinner;
+  if (mw) lines.push(`1X2: home ${pct(mw.home)}, draw ${pct(mw.draw)}, away ${pct(mw.away)}`);
+  const ou = d.fairProbs?.overUnder;
+  if (ou) lines.push(`Over/Under ${ou.line}: over ${pct(ou.over)}, under ${pct(ou.under)}`);
+  return lines.join("\n");
+}
+
+// The market prices full standings; position/points/form is enough context.
+function slimStanding(s) {
+  if (!s) return null;
+  return { pos: s.pos, points: s.points, played: s.played, form: s.form };
+}
+
+// Rest, congestion, and what's next — the calendar is the part of "recent
+// matches" the market prices imperfectly. Computed here so the model
+// reasons over facts instead of re-deriving form from raw results.
+export function scheduleFacts(recent = [], upcoming = [], kickoffIso) {
+  const ko = new Date(kickoffIso).getTime();
+  const DAY = 86_400_000;
+  const played = recent
+    .map((m) => new Date(m.date).getTime())
+    .filter((t) => Number.isFinite(t) && t < ko);
+  const lastT = played.length ? Math.max(...played) : null;
+  const lastMatch =
+    lastT != null ? recent.find((m) => new Date(m.date).getTime() === lastT) : null;
+  const nexts = upcoming
+    .map((m) => ({ t: new Date(m.date).getTime(), m }))
+    .filter((x) => Number.isFinite(x.t) && x.t > ko + 3 * 3_600_000)
+    .sort((a, b) => a.t - b.t);
+  return {
+    daysSinceLastMatch: lastT != null ? Math.round(((ko - lastT) / DAY) * 10) / 10 : null,
+    lastMatchCompetition: lastMatch?.competition ?? null,
+    matchesInLast14Days: played.filter((t) => ko - t <= 14 * DAY).length,
+    daysToNextMatch: nexts.length ? Math.round(((nexts[0].t - ko) / DAY) * 10) / 10 : null,
+    nextMatchCompetition: nexts.length ? (nexts[0].m.competition ?? null) : null,
+  };
+}
+
 function buildUserPrompt(d) {
-  const homeOut = (d.homeInjuries?.out || []).join(", ") || "none reported";
-  const homeDoubtful = (d.homeInjuries?.doubtful || []).join(", ") || "none reported";
-  const awayOut = (d.awayInjuries?.out || []).join(", ") || "none reported";
-  const awayDoubtful = (d.awayInjuries?.doubtful || []).join(", ") || "none reported";
+  const homeSchedule = scheduleFacts(d.homeRecent, d.homeUpcoming, d.kickoff);
+  const awaySchedule = scheduleFacts(d.awayRecent, d.awayUpcoming, d.kickoff);
 
   return `Match: ${d.home} (home) vs ${d.away} (away)
 Kickoff: ${d.kickoff}
 Hours until kickoff: ${d.hoursToKickoff}
 fan_team: ${d.isFanTeam ? "true — STAY OBJECTIVE" : "false"}
 
-=== BOOKMAKER ODDS ===
-${JSON.stringify(d.odds)}
+${buildBaselineSection(d)}
 
-=== ${d.home} — CURRENT STANDING ===
-${JSON.stringify(d.homeStanding)}
-
-=== ${d.away} — CURRENT STANDING ===
-${JSON.stringify(d.awayStanding)}
+=== SCHEDULE FACTS (computed — rest, congestion, what's next) ===
+${d.home}: ${JSON.stringify(homeSchedule)}
+${d.away}: ${JSON.stringify(awaySchedule)}
 
 === ${d.home} — INJURY STATUS ===
-OUT: ${homeOut}
-DOUBTFUL: ${homeDoubtful}
+${fmtInjuries(d.homeInjuries)}
 
 === ${d.away} — INJURY STATUS ===
-OUT: ${awayOut}
-DOUBTFUL: ${awayDoubtful}
+${fmtInjuries(d.awayInjuries)}
 
-=== ${d.home} — LAST 5 MATCHES ===
-${JSON.stringify(d.homeRecent)}
+=== STANDINGS (context only — already priced) ===
+${d.home}: ${JSON.stringify(slimStanding(d.homeStanding))}
+${d.away}: ${JSON.stringify(slimStanding(d.awayStanding))}
 
-=== ${d.home} — NEXT 5 FIXTURES ===
-${JSON.stringify(d.homeUpcoming)}
+=== LAST 5 MATCHES (context only — already priced; use for calendar/rotation reading, not form re-pricing) ===
+${d.home}: ${JSON.stringify(d.homeRecent)}
+${d.away}: ${JSON.stringify(d.awayRecent)}
 
-=== ${d.away} — LAST 5 MATCHES ===
-${JSON.stringify(d.awayRecent)}
-
-=== ${d.away} — NEXT 5 FIXTURES ===
-${JSON.stringify(d.awayUpcoming)}
-
-=== HEAD TO HEAD (last 5) ===
-${JSON.stringify(d.h2h)}
+=== NEXT 5 FIXTURES (rotation pressure) ===
+${d.home}: ${JSON.stringify(d.homeUpcoming)}
+${d.away}: ${JSON.stringify(d.awayUpcoming)}
 
 Return JSON only.`;
 }
 
-// Same input/output shape as the old ai-debate-bridge version; tokens come
-// from the CLI result envelope.
+// ── Main entry ───────────────────────────────────────────────────────────────
+
+// data: match context assembled by pipeline.runFullAnalysis, including
+// `fairProbs` (de-vigged baseline) and `fairSource`. Returns anchored
+// probabilities; pick selection happens in pipeline.js against the same
+// fair baseline.
 export async function analyzeMatch(data) {
-  const ouLine = data.odds?.overUnder?.line ?? 2.5;
+  const ouLine = data.fairProbs?.overUnder?.line ?? data.odds?.overUnder?.line ?? 2.5;
+
+  if (!data.fairProbs) {
+    // No odds posted yet → no baseline and no possible pick. Skip the model
+    // call; the next run (closer to kickoff) will have odds.
+    return {
+      probs: null,
+      probsExact: null,
+      overUnder: null,
+      overUnderExact: null,
+      ouLine,
+      confidence: null,
+      deltas: null,
+      deltasRaw: null,
+      protocolViolations: [],
+      keyFactors: [],
+      reasoning: ["No bookmaker odds available yet — analysis deferred to the next run."],
+      reasoningKr: ["아직 배당이 등록되지 않아 분석을 다음 실행으로 미룹니다."],
+      isFanTeam: data.isFanTeam || false,
+      odds: data.odds || null,
+      model: MODEL,
+      backend: "claude-cli",
+      engine: "v2-market-anchored",
+      skipped: "no_odds",
+      tokens: { input: 0, output: 0 },
+    };
+  }
+
   const { data: prediction, usage } = await claudeAnalyze({
-    systemPrompt: buildSystemPrompt(ouLine),
+    systemPrompt: buildSystemPrompt(ouLine, data.fairSource),
     userPrompt: buildUserPrompt(data),
   });
+  validateV2(prediction);
 
+  const confidence = Math.round(Number(prediction.confidence));
+  const { deltas: cleanDeltas, violations: sanitizeViolations } = sanitizeDeltas(prediction.deltas);
+  const violations = [...sanitizeViolations];
+
+  // Cross-field consistency: a big delta claims exceptional evidence, and
+  // exceptional evidence cannot be low-confidence. Zero contradictory output.
+  let effectiveDeltas = cleanDeltas;
+  const maxAbs = Math.max(
+    ...["home", "draw", "away", "over"].map((k) => Math.abs(cleanDeltas[k]))
+  );
+  if (maxAbs >= BIG_DELTA && confidence < 50) {
+    violations.push(
+      `|delta|=${maxAbs.toFixed(1)} with confidence ${confidence} < 50 — self-contradictory, all deltas zeroed`
+    );
+    effectiveDeltas = { home: 0, draw: 0, away: 0, over: 0 };
+  }
+
+  const anchored = applyMarketAnchoredDeltas(data.fairProbs, effectiveDeltas);
+  violations.push(...anchored.violations);
+
+  if (violations.length) {
+    console.log(`[analyze] ${data.home} vs ${data.away} — protocol violations: ${violations.join(" | ")}`);
+  }
   console.log(
-    `[analyze] ${data.home} vs ${data.away} — tokens in=${usage?.input_tokens ?? 0} out=${usage?.output_tokens ?? 0}`
+    `[analyze] ${data.home} vs ${data.away} — deltas=${JSON.stringify(anchored.appliedDeltas)} conf=${confidence} tokens in=${usage?.input_tokens ?? 0} out=${usage?.output_tokens ?? 0}`
   );
 
   return {
-    probs: prediction.probs,
-    overUnder: prediction.overUnder,
+    probs: anchored.probs,
+    probsExact: anchored.probsExact,
+    overUnder: anchored.overUnder,
+    overUnderExact: anchored.overUnderExact,
     ouLine,
-    pick: prediction.pick === "none" ? null : prediction.pick,
-    edge: prediction.edge,
-    confidence: prediction.confidence,
+    confidence,
+    deltas: anchored.appliedDeltas,
+    deltasRaw: prediction.deltas,
+    protocolViolations: violations,
+    keyFactors: Array.isArray(prediction.keyFactors) ? prediction.keyFactors : [],
     reasoning: prediction.reasoning,
     reasoningKr: prediction.reasoningKr ?? prediction.reasoning,
     isFanTeam: data.isFanTeam || false,
     odds: data.odds || null,
     model: MODEL,
     backend: "claude-cli",
+    engine: "v2-market-anchored",
+    skipped: null,
     tokens: {
       input: usage?.input_tokens ?? 0,
       output: usage?.output_tokens ?? 0,
